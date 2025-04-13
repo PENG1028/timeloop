@@ -1,0 +1,16 @@
+{
+    "plans": {
+        "手枪": {
+            "hold_time": 10,
+            "rest_time": 10,
+            "rounds": 5
+        },
+        "步枪": {
+            "hold_time": 20,
+            "rest_time": 20,
+            "rounds": 5
+        }
+    },
+    "prepare_time": 5,
+    "ready_time": 3
+}

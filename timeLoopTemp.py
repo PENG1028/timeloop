@@ -3,6 +3,7 @@
 多项目射击训练计时 & 语音播报 & 实时终端UI
 By ChatGPT (优化重构版)
 """
+import json
 
 import time
 import threading
@@ -19,10 +20,13 @@ from rich.console import Console
 
 console = Console()
 
-training_plans = {
-    "手枪": {"hold_time": 10, "rest_time": 10, "rounds": 5},
-    "步枪": {"hold_time": 20, "rest_time": 20, "rounds": 5}
-}
+
+with open("config.json", "r", encoding="utf-8") as f:
+    config = json.load(f)
+
+training_plans = config["plans"]
+prepare_time = config["prepare_time"]
+ready_time = config["ready_time"]
 
 # 语音播报
 tts = pyttsx3.init()
@@ -72,14 +76,14 @@ def run_training(mode, plan):
     hold_time = plan["hold_time"]
     rest_time = plan["rest_time"]
 
-    wait(5, "训练准备", mode)
+    wait(prepare_time, "训练准备", mode)
 
     for i in range(1, total_rounds + 1):
         state_data[mode]["remaining_rounds"] = total_rounds - i + 1
 
         with tts_lock:
             log(mode, f"第 {i} 枪准备", speak=True)
-            time.sleep(3)
+            time.sleep(ready_time)
             log(mode, "开始", speak=True)
 
         wait(hold_time, "举枪", mode)
