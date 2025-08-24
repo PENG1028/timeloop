@@ -1,0 +1,127 @@
+"use client";
+
+import { useMemo } from "react";
+import type { UnitSpec } from "../_types/timer";
+
+export type PlanDraft = {
+  title: string;
+  rounds: number;
+  units: UnitSpec[]; // { name, seconds, say? }
+};
+
+type Props = {
+  mode: "flow" | "template"; // 流程页可显示「从模板载入」
+  draft: PlanDraft;
+  setDraft: (d: PlanDraft) => void;
+  onConfirm: () => void;      // 右下角「确认」
+  onCancel: () => void;       // 左下角「取消」
+  templateOptions?: { id: string; title: string }[];
+  onLoadTemplate?: (id: string) => void;
+};
+
+export default function PlanEditor({
+  mode, draft, setDraft, onConfirm, onCancel, templateOptions, onLoadTemplate
+}: Props) {
+  function up(i:number){ if(i<=0) return; const arr=[...draft.units]; const [it]=arr.splice(i,1); arr.splice(i-1,0,it); setDraft({...draft, units:arr}); }
+  function dn(i:number){ if(i>=draft.units.length-1) return; const arr=[...draft.units]; const [it]=arr.splice(i,1); arr.splice(i+1,0,it); setDraft({...draft, units:arr}); }
+  function setUnit(i:number, partial: Partial<UnitSpec>){ const arr=[...draft.units]; arr[i]={...arr[i], ...partial}; setDraft({...draft, units:arr}); }
+  function add(){ setDraft({...draft, units:[...draft.units, { name:"", seconds:0 }]}); }
+  function del(i:number){ setDraft({...draft, units: draft.units.filter((_,idx)=>idx!==i)}); }
+
+  const ok = useMemo(()=>{
+    if (!draft.title.trim()) return false;
+    if (!Number.isFinite(draft.rounds) || draft.rounds < 1) return false;
+    if (!draft.units.length) return false;
+    for (const u of draft.units) {
+      if (!u.name?.trim()) return false;
+      if (!Number.isFinite(u.seconds) || u.seconds <= 0) return false;
+    }
+    return true;
+  }, [draft]);
+
+  return (
+    <div className="pb-28">
+      {/* 顶部：全局属性（清晰注释） */}
+      <div className="rounded-2xl p-4 border border-slate-200/60 dark:border-white/10 bg-white/80 dark:bg-white/5 mb-3">
+        <div className="grid gap-3">
+          <label className="text-sm opacity-70">流程/模板标题（必填）</label>
+          <input className="rounded-xl border px-4 py-3 text-base bg-transparent"
+                 placeholder="例如：番茄钟 / 射击循环 / 口条训练"
+                 value={draft.title} onChange={e=>setDraft({...draft, title:e.target.value})}/>
+          <div>
+            <label className="text-sm opacity-70">重复轮数（≥1）</label>
+            <input type="number" min={1} className="mt-1 rounded-xl border px-4 py-3 text-base bg-transparent"
+                   placeholder="例如：4"
+                   value={draft.rounds} onChange={e=>setDraft({...draft, rounds:Number(e.target.value)||0})}/>
+            <p className="text-xs opacity-60 mt-1">「轮」表示整套单元顺序重复的次数。</p>
+          </div>
+
+          {mode==="flow" && (templateOptions?.length ?? 0) > 0 && (
+            <div>
+              <label className="text-sm opacity-70">从模板载入（可选）</label>
+              <select className="mt-1 rounded-xl border px-4 py-3 text-base bg-transparent"
+                      onChange={e=> e.target.value && onLoadTemplate?.(e.target.value)}>
+                <option value="">选择模板</option>
+                {templateOptions!.map(t=> <option key={t.id} value={t.id}>{t.title}</option>)}
+              </select>
+              <p className="text-xs opacity-60 mt-1">只拷贝字段，不影响模板本身。</p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* 单元卡片（清晰注释） */}
+      <div className="space-y-2">
+        {draft.units.map((u, i)=>(
+          <div key={i} className="rounded-2xl p-3 border border-slate-200/60 dark:border-white/10 bg-white/80 dark:bg-white/5">
+            <div className="grid gap-2">
+              <label className="text-sm opacity-70">单元名称（必填）</label>
+              <input className="rounded-xl border px-3 py-2 text-base bg-transparent"
+                     placeholder="例如：瞄准 / 射击 / 换弹 / 休息"
+                     value={u.name} onChange={e=>setUnit(i,{name:e.target.value})}/>
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="text-sm opacity-70">时长（秒，≥1）</label>
+                  <input type="number" min={1} className="mt-1 rounded-xl border px-3 py-2 text-base bg-transparent"
+                         placeholder="例如：20"
+                         value={u.seconds} onChange={e=>setUnit(i,{seconds:Number(e.target.value)||0})}/>
+                </div>
+                <div className="col-span-2">
+                  <label className="text-sm opacity-70">播报文案（可选）</label>
+                  <input className="mt-1 rounded-xl border px-3 py-2 text-base bg-transparent"
+                         placeholder="例如：开始射击 / 休息十秒"
+                         value={u.say ?? ""} onChange={e=>setUnit(i,{say: e.target.value || undefined})}/>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button className="px-3 py-2 rounded-lg bg-slate-900 text-white/90" onClick={()=>up(i)}>上移</button>
+                <button className="px-3 py-2 rounded-lg bg-slate-900 text-white/90" onClick={()=>dn(i)}>下移</button>
+                <button className="ml-auto px-3 py-2 rounded-lg bg-rose-600 text-white" onClick={()=>del(i)}>删除</button>
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {/* 永久存在的“虚线空卡片”——点击就新增一张 */}
+        <button className="w-full rounded-2xl border-2 border-dashed p-6 text-slate-500" onClick={add}>
+          + 添加一个单元
+        </button>
+      </div>
+
+      {/* 底部固定操作条（左取消 / 右确认，确认需通过校验） */}
+      <div className="fixed left-0 right-0 bottom-0 z-20 bg-white/95 dark:bg-slate-900/95 border-t border-slate-200/60 dark:border-white/10 px-4 py-3"
+           style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 12px)" }}>
+        <div className="max-w-3xl mx-auto flex items-center justify-between">
+          <button className="px-4 py-3 rounded-xl bg-slate-200 dark:bg-white/10" onClick={onCancel}>取消</button>
+          <button
+            className={`px-4 py-3 rounded-xl ${ok?"bg-emerald-600 text-white":"bg-slate-300 text-slate-500 cursor-not-allowed"}`}
+            disabled={!ok}
+            onClick={ok ? onConfirm : undefined}
+          >
+            确认
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

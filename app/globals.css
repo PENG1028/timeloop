@@ -1,0 +1,9 @@
+/* app/globals.css —— 只有这三条指令，拼写是 @tailwind，不是 @tailwindcss */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 可选的小优化 */
+:root { color-scheme: light dark; }
+html, body { height: 100%; }
+body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }

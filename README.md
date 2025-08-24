@@ -1,121 +1,33 @@
-markdown
-# TimeLoop 射击训练计时器
+# TimeLoop — Web + Android Starter (No Default Phrases)
 
-一个用于射击训练的多项目、多轮次计时与语音播报工具。  
-支持多项目同时进行，自动播报口令，实时终端UI状态显示，适合个人或射击队日常训练使用。
+> 最小可运行脚手架：Next.js (App Router) + Tailwind。未包含任何业务逻辑与默认音频短语。
 
----
-
-## 特性 Features
-
-- 多项目独立计时（如手枪、步枪等）
-- 每组包含：
-  - 准备时间
-  - 举枪时间
-  - 休息时间
-- 自动语音播报（支持pyttsx3离线语音）
-- 实时终端UI状态（基于 rich）
-- 支持外部 config.json 配置管理
-- 不同项目可同时并行训练
-- 代码简单，易于扩展
-
----
-
-## 安装依赖
-
+## 快速开始
 ```bash
-pip install -r requirements.txt
+pnpm i   # 或 npm i / yarn
+pnpm dev
 ```
 
-或手动安装：
+## 结构
+- `app/` — App Router 页面
+- `public/manifest.webmanifest` — PWA 清单
+- `public/sw.js` — Service Worker 占位（无预缓存）
+- `styles/` — Tailwind 样式
 
-```bash
-pip install pyttsx3 rich
-```
+## 下一步（按里程碑实施）
+1. **M1 — 引擎协议与 Worker 通道**
+   - 事件/指令协议（Start/Pause/Adjust...）
+   - Web Worker：50–100ms tick，目标绝对时刻
+2. **M2 — 本地缓存与离线**
+   - IndexedDB + Cache Storage（仅结构与元数据，未含默认短语）
+   - Service Worker 缓存策略
+3. **M3 — CPU 轻量 TTS 接入**
+   - HTTP `GET /tts?...`（缓存命中/未命中流式）
+   - 预取窗口 100–200ms 校验命中
+4. **M4 — Android**
+   - PWA 直接安装，或外壳（WebView/TWA）包装
+   - 蓝牙音频延迟校准流程
 
----
-
-## 使用方法
-
-1. 修改配置文件
-```bash
-# 复制示例配置
-cp config.json.example config.json
-```
-
-2. 编辑 config.json 内容
-```json
-{
-  "plans": {
-    "手枪": {
-      "hold_time": 10,
-      "rest_time": 10,
-      "rounds": 5
-    },
-    "步枪": {
-      "hold_time": 20,
-      "rest_time": 20,
-      "rounds": 5
-    }
-  },
-  "prepare_time": 5,
-  "ready_time": 3
-}
-```
-
----
-
-3. 运行程序
-```bash
-python timeLoopTemp.py
-```
-
----
-
-## 效果展示
-
-```
-┏━━━━━━┳━━━━━━┳━━━━━━━━┳━━━━━━━━┳━━━━━━━━┓
-┃ 项目 ┃ 状态  ┃ 时间   ┃ 剩余时间┃ 剩余轮次┃
-┡━━━━━━╇━━━━━━╇━━━━━━━━╇━━━━━━━━╇━━━━━━━━┩
-│ 手枪 │ 举枪  │ 7/10s  │ 3s     │ 3轮    │
-│ 步枪 │ 休息  │ 5/20s  │ 15s    │ 4轮    │
-└──────┴──────┴────────┴────────┴────────┘
-```
-
-
----
-
-## 目录结构
-
-```
-TimeLoop/
-├── timeLoopTemp.py          # 主程序
-├── config.json.example      # 配置示例（需复制）
-├── config.json              # 个人配置（git忽略）
-├── requirements.txt         # 依赖库
-├── .gitignore
-└── LICENSE                  # 开源协议
-```
-
----
-
-## Todo
-
-- [ ] 自动生成日志记录
-- [ ] 自定义项目参数导入导出
-- [ ] 可视化界面（web 或 app）
-- [ ] 多语言播报支持
-- [ ] 自动打包 .exe 或 .apk
-
----
-
-## 作者
-
-Made with curiosity & learning by [PENG1028](https://github.com/PENG1028)
-
----
-
-## License
-
-This project is licensed under the MIT License — feel free to use, modify, and share.
+## 下一步要做
+1. 函数式播报
+2. 优化模板选择栏
