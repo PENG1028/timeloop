@@ -1,243 +1,305 @@
 /// <reference lib="webworker" />
-import { buildTimeline, Command, Event, FlowRuntime, PlanSpec } from "../_types/timer";
+export {};
 
-type Flows = Map<string, FlowRuntime>;
-const flows: Flows = new Map();
+type UnitSpec = { name: string; seconds: number; say?: string };
+type PlanSpec = {
+  title: string;
+  rounds: number;
+  units: UnitSpec[];
+  // 你不需要 prepare/betweenRounds 就不要加；若已有字段，忽略即可
+};
 
-let loopTimer: number | undefined;
-const TICK_MS = 50;
+type BaseCmd = { type: string; flowId: string };
+type CmdStart       = BaseCmd & { type: "START";        payload: PlanSpec };
+type CmdPause       = BaseCmd & { type: "PAUSE" };
+type CmdResume      = BaseCmd & { type: "RESUME" };
+type CmdStop        = BaseCmd & { type: "STOP" };
+type CmdNextUnit    = BaseCmd & { type: "NEXT_UNIT" };
+type CmdNextRound   = BaseCmd & { type: "NEXT_ROUND" };
+type CmdAdjustTime  = BaseCmd & { type: "ADJUST_TIME"; scope?: "current"; deltaSec?: number; setSec?: number };
+type Command = CmdStart | CmdPause | CmdResume | CmdStop | CmdNextUnit | CmdNextRound | CmdAdjustTime;
 
-function now(): number {
-  // @ts-ignore
-  return self.performance.now();
-}
-function post(e: Event) {
-  // @ts-ignore
-  (self as any).postMessage(e);
-}
+// —— 事件契约（关键！）——
+// 1) 进入单元：FLOW_PHASE_ENTER（必带 unitIndex / roundIndex / phaseName / totalMs / remainingMs）
+// 2) 每一帧：    FLOW_TICK        （必带 unitIndex / roundIndex / phaseName / remainingMs）
+// 3) 进入新一轮：FLOW_ROUND_ENTER（建议发；至少带 roundIndex，最好也带 unitIndex=0 / phaseName）
+// 4) 状态同步：  FLOW_STATE       （paused/done）
+// 5) 结束：      FLOW_DONE
+type EvPhaseEnter = {
+  type: "FLOW_PHASE_ENTER";
+  flowId: string;
+  unitIndex: number;
+  roundIndex: number;
+  phaseName: string;
+  totalMs: number;
+  remainingMs: number;
+};
+type EvTick = {
+  type: "FLOW_TICK";
+  flowId: string;
+  unitIndex: number;
+  roundIndex: number;
+  phaseName: string;
+  remainingMs: number;
+};
+type EvRoundEnter = {
+  type: "FLOW_ROUND_ENTER";
+  flowId: string;
+  roundIndex: number;
+  unitIndex?: number;
+  phaseName?: string;
+};
+type EvState = {
+  type: "FLOW_STATE";
+  flowId: string;
+  paused: boolean;
+  done: boolean;
+};
+type EvDone = { type: "FLOW_DONE"; flowId: string };
+type EvError = { type: "ERROR"; flowId: string; message: string };
+type Event = EvPhaseEnter | EvTick | EvRoundEnter | EvState | EvDone | EvError;
 
-function emitTick(fr: FlowRuntime) {
-  const relNow = now() - fr.startEpoch;
-  const pr = fr.timeline[fr.unitIndex];
-  if (!pr) return;
-  const remaining = Math.max(0, pr.endAt - relNow);
-  post({ type: "FLOW_TICK", flowId: fr.flowId, remainingMs: remaining, phaseName: pr.name, unitIndex: fr.unitIndex, roundIndex: fr.roundIndex });
-}
-function emitPausedTick(fr: FlowRuntime) {
-  const pr = fr.timeline[fr.unitIndex];
-  if (!pr) return;
-  const remaining = Math.max(0, Math.floor(fr.pauseRemainingMs ?? 0));
-  post({ type: "FLOW_TICK", flowId: fr.flowId, remainingMs: remaining, phaseName: pr.name, unitIndex: fr.unitIndex, roundIndex: fr.roundIndex });
-}
+// —— 工具 —— 
+const ctx: DedicatedWorkerGlobalScope = self as any;
+function post(ev: Event) { ctx.postMessage(ev); }
+function clamp(n: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, n)); }
 
-function ensureLoop() {
-  if (loopTimer != null) return;
-  const tick = () => {
-    const t = now();
-    let anyRunning = false;
+// —— 每个流程的独立引擎 —— 
+class FlowEngine {
+  readonly id: string;
+  readonly plan: PlanSpec;
+  private timer: number | null = null;
+  private lastTs = 0;
 
-    flows.forEach((fr) => {
-      if (fr.done || fr.paused) return;
+  private unitIndex = 0;
+  private roundIndex = 0;
+  private remainingMs = 0;
 
-      const relNow = t - fr.startEpoch;
-      const pr = fr.timeline[fr.unitIndex];
-      if (!pr) return;
+  private paused = false;
+  private done = false;
 
-      const remaining = Math.max(0, pr.endAt - relNow);
-      anyRunning = true;
+  // tick 粒度（可 100~200ms）
+  private intervalMs = 200;
 
-      post({ type: "FLOW_TICK", flowId: fr.flowId, remainingMs: remaining, phaseName: pr.name, unitIndex: fr.unitIndex, roundIndex: fr.roundIndex });
+  constructor(id: string, plan: PlanSpec) {
+    this.id = id;
+    this.plan = {
+      title: plan.title,
+      rounds: Math.max(1, plan.rounds | 0),
+      units: [...plan.units],
+    };
+    if (this.plan.units.length === 0) {
+      throw new Error("Plan must have at least 1 unit");
+    }
+  }
 
-      if (remaining <= 0) {
-        fr.unitIndex++;
-        const next = fr.timeline[fr.unitIndex];
-        if (!next) {
-          fr.done = true;
-          post({ type: "FLOW_STATE", flowId: fr.flowId, paused: false, done: true });
-          post({ type: "FLOW_DONE", flowId: fr.flowId });
-          return;
-        }
+  start() {
+    // 初始化到第 0 单元第 0 轮
+    this.unitIndex = 0;
+    this.roundIndex = 0;
+    this.remainingMs = this.curUnitTotalMs();
 
-        // 轮推进：上一节点是 betweenRounds 则 +1
-        const prev = fr.timeline[fr.unitIndex - 1];
-        if (prev?.name === "betweenRounds") fr.roundIndex += 1;
+    // 进入单元 + 第一帧 tick
+    this.emitPhaseEnter();
+    this.emitTick();
 
-        post({ type: "FLOW_PHASE_ENTER", flowId: fr.flowId, unitIndex: fr.unitIndex, roundIndex: fr.roundIndex, phaseName: next.name, endsAt: fr.startEpoch + next.endAt, totalMs: next.ms });
+    // 启动定时器（抗抖动，用时间差推进）
+    this.lastTs = Date.now();
+    this.timer = setInterval(() => this.onInterval(), this.intervalMs) as unknown as number;
+
+    // 状态同步
+    this.emitState();
+  }
+
+  pause() {
+    if (this.done) return;
+    this.paused = true;
+    this.emitState();
+  }
+
+  resume() {
+    if (this.done) return;
+    this.paused = false;
+    // 校准时间基准，避免“暂停期间”的时间被扣减
+    this.lastTs = Date.now();
+    this.emitState();
+    // 恢复一帧 tick 让 UI/音频立刻对齐当前 remaining
+    this.emitTick();
+  }
+
+  stop() {
+    if (this.timer != null) { clearInterval(this.timer as any); this.timer = null; }
+    this.done = true;
+    this.emitState();
+    // 不发 DONE（STOP 是外部主动打断）；若你希望 STOP 也视为 DONE，可以改成 post({type:"FLOW_DONE", ...})
+  }
+
+  nextUnit() {
+    if (this.done) return;
+    if (this.unitIndex < this.plan.units.length - 1) {
+      this.unitIndex++;
+    } else {
+      // 到末尾切下一轮
+      if (this.roundIndex < this.plan.rounds - 1) {
+        this.roundIndex++;
+        this.unitIndex = 0;
+        this.emitRoundEnter();
+      } else {
+        // 真正完成
+        return this.finish();
       }
-    });
+    }
+    this.remainingMs = this.curUnitTotalMs();
+    this.emitPhaseEnter();
+    this.emitTick();
+  }
 
-    if (!anyRunning) {
-      loopTimer = undefined;
+  nextRound() {
+    if (this.done) return;
+    if (this.roundIndex < this.plan.rounds - 1) {
+      this.roundIndex++;
+      this.unitIndex = 0;
+      this.remainingMs = this.curUnitTotalMs();
+      this.emitRoundEnter();
+      this.emitPhaseEnter();
+      this.emitTick();
+    } else {
+      return this.finish();
+    }
+  }
+
+  adjustTime(opts: { deltaSec?: number; setSec?: number; scope?: "current" }) {
+    // 仅支持 current；未来扩展 scope 可在此分支
+    const totalMs = this.curUnitTotalMs();
+    let next = this.remainingMs;
+
+    if (typeof opts.setSec === "number") {
+      next = clamp(Math.round(opts.setSec * 1000), 0, totalMs);
+    }
+    if (typeof opts.deltaSec === "number") {
+      next = clamp(next + Math.round(opts.deltaSec * 1000), 0, totalMs);
+    }
+
+    this.remainingMs = next;
+    // 立刻发一帧 tick：前端音频导演会据此“最后 3 秒滴滴滴”或（若剩余秒显著回升）重新播报
+    this.emitTick();
+  }
+
+  // —— 内部推进 —— 
+  private onInterval() {
+    if (this.paused || this.done) return;
+    const now = Date.now();
+    const dt = now - this.lastTs;
+    this.lastTs = now;
+
+    // 扣减剩余时间
+    this.remainingMs = Math.max(0, this.remainingMs - dt);
+
+    if (this.remainingMs <= 0) {
+      // 切下一单元 / 下一轮 / 完成
+      if (this.unitIndex < this.plan.units.length - 1) {
+        this.unitIndex++;
+      } else {
+        if (this.roundIndex < this.plan.rounds - 1) {
+          this.roundIndex++;
+          this.unitIndex = 0;
+          this.emitRoundEnter();
+        } else {
+          return this.finish();
+        }
+      }
+      this.remainingMs = this.curUnitTotalMs();
+      this.emitPhaseEnter();
+      this.emitTick();
       return;
     }
-    // @ts-ignore
-    loopTimer = (self as any).setTimeout(tick, TICK_MS);
-  };
 
-  // @ts-ignore
-  loopTimer = (self as any).setTimeout(tick, TICK_MS);
-}
-
-function startFlow(flowId: string, spec: PlanSpec) {
-  const tl = buildTimeline(spec);
-  const startEpoch = now();
-  const hasBetween = !!(spec.betweenRounds && spec.betweenRounds > 0);
-  const prepareCount = spec.prepare && spec.prepare > 0 ? 1 : 0;
-  const unitsPerRound = spec.units.length + (hasBetween ? 1 : 0);
-
-  const fr: FlowRuntime = {
-    flowId,
-    title: spec.title,
-    startEpoch,
-    paused: false,
-    roundIndex: 0,
-    unitIndex: 0,
-    timeline: tl,
-    unitsPerRound,
-    hasBetweenBreak: hasBetween,
-    prepareCount,
-    done: false,
-  };
-  flows.set(flowId, fr);
-
-  const first = tl[0];
-  post({ type: "FLOW_PHASE_ENTER", flowId, unitIndex: 0, roundIndex: 0, phaseName: first?.name ?? "idle", endsAt: startEpoch + (first?.endAt ?? 0), totalMs: first?.ms ?? 0 });
-  post({ type: "FLOW_STATE", flowId, paused: false, done: false });
-  emitTick(fr);
-  ensureLoop();
-}
-
-function pauseFlow(flowId: string) {
-  const fr = flows.get(flowId);
-  if (!fr || fr.paused || fr.done) return;
-  const relNow = now() - fr.startEpoch;
-  const pr = fr.timeline[fr.unitIndex];
-  if (!pr) return;
-  fr.pauseRemainingMs = Math.max(0, pr.endAt - relNow);
-  fr.paused = true;
-  post({ type: "FLOW_STATE", flowId, paused: true, done: false });
-  emitPausedTick(fr);
-}
-function resumeFlow(flowId: string) {
-  const fr = flows.get(flowId);
-  if (!fr || !fr.paused || fr.done) return;
-  const remaining = fr.pauseRemainingMs ?? 0;
-  const pr = fr.timeline[fr.unitIndex];
-  const newStart = now() + remaining - (pr?.endAt ?? 0);
-  fr.startEpoch = newStart;
-  fr.paused = false;
-  fr.pauseRemainingMs = undefined;
-  post({ type: "FLOW_STATE", flowId, paused: false, done: false });
-  emitTick(fr);
-  ensureLoop();
-}
-function stopFlow(flowId: string) {
-  const fr = flows.get(flowId);
-  if (!fr) return;
-  fr.done = true;
-  flows.delete(flowId);
-  post({ type: "FLOW_STATE", flowId, paused: false, done: true });
-  post({ type: "FLOW_DONE", flowId });
-}
-
-function nextUnit(flowId: string) {
-  const fr = flows.get(flowId);
-  if (!fr || fr.done) return;
-  fr.unitIndex = Math.min(fr.timeline.length, fr.unitIndex + 1);
-  const next = fr.timeline[fr.unitIndex];
-  if (!next) {
-    fr.done = true;
-    post({ type: "FLOW_STATE", flowId, paused: false, done: true });
-    post({ type: "FLOW_DONE", flowId });
-    return;
-  }
-  const prev = fr.timeline[fr.unitIndex - 1];
-  if (prev?.name === "betweenRounds") fr.roundIndex += 1;
-
-  post({ type: "FLOW_PHASE_ENTER", flowId, unitIndex: fr.unitIndex, roundIndex: fr.roundIndex, phaseName: next.name, endsAt: fr.startEpoch + next.endAt, totalMs: next.ms });
-  fr.paused ? emitPausedTick(fr) : emitTick(fr);
-}
-
-function nextRound(flowId: string) {
-  const fr = flows.get(flowId);
-  if (!fr || fr.done) return;
-
-  const upr = fr.unitsPerRound;
-  const offset = fr.prepareCount; // prepare 段偏移
-  const curRound = Math.floor(Math.max(0, fr.unitIndex - offset) / upr);
-  const targetRound = curRound + 1;
-  const targetIndex = offset + targetRound * upr;
-
-  if (targetIndex >= fr.timeline.length) {
-    fr.done = true;
-    post({ type: "FLOW_STATE", flowId, paused: false, done: true });
-    post({ type: "FLOW_DONE", flowId });
-    return;
-  }
-  fr.unitIndex = targetIndex;
-  fr.roundIndex = targetRound;
-
-  const next = fr.timeline[fr.unitIndex];
-  post({ type: "FLOW_PHASE_ENTER", flowId, unitIndex: fr.unitIndex, roundIndex: fr.roundIndex, phaseName: next.name, endsAt: fr.startEpoch + next.endAt, totalMs: next.ms });
-  fr.paused ? emitPausedTick(fr) : emitTick(fr);
-}
-
-function adjustTime(flowId: string, deltaSec?: number, setSec?: number) {
-  const fr = flows.get(flowId);
-  if (!fr || fr.done) return;
-  const idx = fr.unitIndex;
-  const pr = fr.timeline[idx];
-  if (!pr) return;
-
-  if (fr.paused) {
-    const prev = Math.max(0, Math.floor((fr.pauseRemainingMs ?? 0) / 1000));
-    let newRemaining: number;
-    if (typeof setSec === "number") newRemaining = Math.max(0, Math.floor(setSec * 1000));
-    else if (typeof deltaSec === "number") newRemaining = Math.max(0, (fr.pauseRemainingMs ?? 0) + Math.floor(deltaSec * 1000));
-    else return;
-
-    fr.pauseRemainingMs = newRemaining;
-    post({ type: "ADJUST_APPLIED", flowId, scope: "current", prev, next: Math.floor(newRemaining / 1000) });
-    emitPausedTick(fr);
-    return;
+    // 普通一帧
+    this.emitTick();
   }
 
-  // 运行态：平移时间线 endAt
-  const relNow = now() - fr.startEpoch;
-  const remainingBefore = Math.max(0, pr.endAt - relNow);
-
-  let newRemaining: number;
-  if (typeof setSec === "number") {
-    newRemaining = Math.max(0, Math.floor(setSec * 1000));
-  } else if (typeof deltaSec === "number") {
-    newRemaining = Math.max(0, remainingBefore + Math.floor(deltaSec * 1000));
-  } else {
-    return;
+  private finish() {
+    if (this.timer != null) { clearInterval(this.timer as any); this.timer = null; }
+    this.done = true;
+    post({ type: "FLOW_DONE", flowId: this.id });
+    this.emitState();
   }
 
-  const shift = (relNow + newRemaining) - pr.endAt;
-  for (let j = idx; j < fr.timeline.length; j++) {
-    fr.timeline[j].endAt += shift;
+  // —— 事件派发（契约保证）——
+  private emitPhaseEnter() {
+    post({
+      type: "FLOW_PHASE_ENTER",
+      flowId: this.id,
+      unitIndex: this.unitIndex,
+      roundIndex: this.roundIndex,
+      phaseName: this.curUnit().name,
+      totalMs: this.curUnitTotalMs(),
+      remainingMs: this.remainingMs,
+    });
+  }
+  private emitRoundEnter() {
+    post({
+      type: "FLOW_ROUND_ENTER",
+      flowId: this.id,
+      roundIndex: this.roundIndex,
+      unitIndex: 0,
+      phaseName: this.plan.units[0]?.name,
+    });
+  }
+  private emitTick() {
+    post({
+      type: "FLOW_TICK",
+      flowId: this.id,
+      unitIndex: this.unitIndex,
+      roundIndex: this.roundIndex,
+      phaseName: this.curUnit().name,
+      remainingMs: this.remainingMs,
+    });
+  }
+  private emitState() {
+    post({ type: "FLOW_STATE", flowId: this.id, paused: this.paused, done: this.done });
   }
 
-  post({ type: "ADJUST_APPLIED", flowId, scope: "current", prev: Math.floor(remainingBefore / 1000), next: Math.floor(newRemaining / 1000) });
-  emitTick(fr);
+  private curUnit() { return this.plan.units[this.unitIndex]; }
+  private curUnitTotalMs() { return Math.max(0, Math.round(this.curUnit().seconds * 1000)); }
 }
 
-self.onmessage = (e: MessageEvent<Command>) => {
-  const msg = e.data;
+// —— 多流程管理 —— 
+const flows = new Map<string, FlowEngine>();
+
+function getFlow(id: string) {
+  const f = flows.get(id);
+  if (!f) throw new Error(`Flow ${id} not found`);
+  return f;
+}
+
+ctx.onmessage = (e: MessageEvent<Command>) => {
+  const cmd = e.data;
   try {
-    switch (msg.type) {
-      case "START": return startFlow(msg.flowId, msg.payload);
-      case "PAUSE": return pauseFlow(msg.flowId);
-      case "RESUME": return resumeFlow(msg.flowId);
-      case "STOP": return stopFlow(msg.flowId);
-      case "NEXT_UNIT": return nextUnit(msg.flowId);
-      case "NEXT_ROUND": return nextRound(msg.flowId);
-      case "ADJUST_TIME": return adjustTime(msg.flowId, msg.deltaSec, msg.setSec);
-      default: return;
+    switch (cmd.type) {
+      case "START": {
+        // 先停止同名的旧实例（若存在）
+        try { getFlow(cmd.flowId).stop(); } catch {}
+        const f = new FlowEngine(cmd.flowId, cmd.payload);
+        flows.set(cmd.flowId, f);
+        f.start();
+        break;
+      }
+      case "PAUSE": getFlow(cmd.flowId).pause(); break;
+      case "RESUME": getFlow(cmd.flowId).resume(); break;
+      case "STOP": {
+        const f = getFlow(cmd.flowId);
+        f.stop();
+        flows.delete(cmd.flowId);
+        break;
+      }
+      case "NEXT_UNIT": getFlow(cmd.flowId).nextUnit(); break;
+      case "NEXT_ROUND": getFlow(cmd.flowId).nextRound(); break;
+      case "ADJUST_TIME": getFlow(cmd.flowId).adjustTime({ deltaSec: cmd.deltaSec, setSec: cmd.setSec, scope: cmd.scope }); break;
+      default:
+        post({ type: "ERROR", flowId: cmd.flowId, message: `Unknown command: ${cmd.type}` });
     }
   } catch (err: any) {
-    post({ type: "ERROR", flowId: (msg as any).flowId, message: err?.message ?? String(err) });
+    post({ type: "ERROR", flowId: cmd.flowId, message: String(err?.message || err) });
   }
 };

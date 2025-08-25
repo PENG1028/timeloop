@@ -3,7 +3,7 @@
 import { useEffect, useRef, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useFlowStore } from "../../_store/flows";
-import { useTimerClient } from "../../_hooks/useTimerClient";
+import { useTimerClient, unlockGlobalAudio } from "../../_hooks/useTimerClient";
 import type { PlanSpec } from "../../_types/timer";
 import PlanEditor, { type PlanDraft } from "../../_components/PlanEditor";
 
@@ -19,67 +19,15 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
   const audioRef = useRef<any>(null);
   const pfRef = useRef<any>(null);
 
-  useEffect(() => {
-    if (!mounted) return;
-    let cancelled = false;
-    (async () => {
-      const [{ AudioEngine }, { Prefetcher }] = await Promise.all([
-        import("../../_lib/audio"),
-        import("../../_lib/prefetcher"),
-      ]);
-      if (cancelled) return;
-      audioRef.current = new AudioEngine();
-      pfRef.current = new Prefetcher(audioRef.current);
-    })();
-    return () => { cancelled = true; };
-  }, [mounted]);
-
-  const g: any = globalThis as any;
-  const [isPrimary, setIsPrimary] = useState(false);
-  useEffect(() => {
-    if (!mounted) return;
-    if (!g.__TL_AUDIO_PRIMARY__) { g.__TL_AUDIO_PRIMARY__ = 1; setIsPrimary(true); }
-    return () => { if (isPrimary) g.__TL_AUDIO_PRIMARY__ = 0; };
-  }, [mounted, isPrimary]);
 
 
 
   const router = useRouter();
   const store = useFlowStore();
   const plan = useMemo(() => store.getFlowPlan(params.id), [store, params.id]);
-  const [, force] = useState<number>(0);
   const lastSecRef = useRef<number>(-1);
+  const [, force] = useState<number>(0);
   const { flows, start, pause, resume, stop, adjustTime } = useTimerClient((ev: any) => {
-    audioRef.current?.handleEvent?.(ev);
-    pfRef.current?.handleEvent?.(ev);
-
-    // 非主控：仅刷新 UI，不做 TTS/蜂鸣
-    if (!isPrimary) {
-      if (ev?.type === "FLOW_TICK" || ev?.type === "FLOW_PHASE_ENTER" || ev?.type === "FLOW_STATE" || ev?.type === "FLOW_DONE") {
-        force((x: number) => x + 1);
-      }
-      return;
-    }
-
-    // 主控：做同首页的播报/蜂鸣映射
-    if (ev?.type === "FLOW_PHASE_ENTER") {
-      const unit = plan?.units?.[ev.unitIndex];
-      if (unit?.say) audioRef.current?.speak?.(unit.say);
-      else audioRef.current?.beep?.();
-      lastSecRef.current = -1;
-    }
-    if (ev?.type === "FLOW_TICK") {
-      const sec = Math.max(0, Math.ceil(ev.remainingMs / 1000));
-      if (sec !== lastSecRef.current) {
-        lastSecRef.current = sec;
-        if (sec > 0 && sec <= 3) audioRef.current?.beep?.();
-      }
-    }
-    if (ev?.type === "FLOW_DONE") {
-      lastSecRef.current = -1;
-      audioRef.current?.beep?.();
-    }
-
     if (ev?.type === "FLOW_TICK" || ev?.type === "FLOW_PHASE_ENTER" || ev?.type === "FLOW_STATE" || ev?.type === "FLOW_DONE") {
       force((x: number) => x + 1);
     }
@@ -105,7 +53,7 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
       const byName = plan.units.find(u => u.name === (view?.phaseName ?? ""));
       return byName?.seconds ?? 0;
     })();
-  
+
   const timeStr = `${totalSec} / ${remainSec}`;
   const roundStr = view ? `${(view.roundIndex ?? -1) + 1}/${plan.rounds}` : `0/${plan.rounds}`;
 
@@ -150,7 +98,7 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
         </div>
         <div className="mt-3 grid grid-cols-3 gap-2">
           {(!view || view.done) && (
-            <button className="px-3 py-2 rounded-lg bg-emerald-600 text-white" onClick={() => start(params.id, plan)}>
+            <button className="px-3 py-2 rounded-lg bg-emerald-600 text-white" onClick={() => { unlockGlobalAudio(); start(params.id, plan); }}>
               开始
             </button>
           )}
@@ -161,7 +109,8 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
           )}
           {paused && (
             <>
-              <button className="px-3 py-2 rounded-lg bg-emerald-600 text-white" onClick={() => resume(params.id)}>
+              <button className="px-3 py-2 rounded-lg bg-emerald-600 text-white"
+                onClick={() => { unlockGlobalAudio(); resume(params.id); }}>
                 开始
               </button>
               <button className="px-3 py-2 rounded-lg bg-rose-600 text-white" onClick={() => stop(params.id)}>

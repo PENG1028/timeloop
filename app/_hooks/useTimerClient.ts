@@ -44,6 +44,8 @@ if (!g.__TL_BUS__) {
     lastSec: new Map(),
     lastUnit: new Map(),
     lastRound: new Map(),
+    speakKey: new Map<string, string>(),
+    speakAt:  new Map<string, number>(),
   } as TLBus;
 }
 const BUS = g.__TL_BUS__ as TLBus;
@@ -56,9 +58,10 @@ function ensureBusShape() {
   BUS.lastSec        ||= new Map();
   BUS.lastUnit       ||= new Map();
   BUS.lastRound      ||= new Map();
-  // 新增：作为兜底的辅助信号
-  BUS.lastRemainSec  ||= new Map();   // 每 flow 最近一次剩余秒
-  BUS.lastPhaseName  ||= new Map();   // 每 flow 最近一次阶段名（单元名）
+  BUS.lastRemainSec  ||= new Map();
+  BUS.lastPhaseName  ||= new Map();
+  BUS.speakKey ||= new Map();
+    BUS.speakAt  ||= new Map();
   if (BUS.audioWired && !BUS.audio) BUS.audioWired = false;
 }
 ensureBusShape();
@@ -81,91 +84,91 @@ async function wireAudioOnce() {
 }
 
 /* ===== 统一：FLOW事件 → 说话/蜂鸣 映射 ===== */
-function audioHandle(ev: Event) {
+function audioHandle(ev: any) {
   if (!BUS.audioWired || !BUS.audio) return;
+  const fid  = ev.flowId;
+  if (!fid) return;
 
-  const type = (ev as any)?.type;
-  const fid  = (ev as any).flowId;
+  // 统一字段：尽量兼容不同 worker 的命名
+  const name = ev.phaseName ?? ev.unitName ?? BUS.lastPhaseName.get(fid) ?? "";
+  const uRaw = ev.unitIndex ?? ev.unit ?? ev.idx;
+  const rRaw = ev.roundIndex ?? ev.round ?? ev.loop;
+  const sec  = typeof ev.remainingMs === "number" ? Math.max(0, Math.ceil(ev.remainingMs/1000)) : BUS.lastRemainSec.get(fid);
 
-  // 统一字段
-  const name = (ev as any).phaseName ?? (ev as any).unitName ?? BUS.lastPhaseName.get(fid) ?? "";
-  const uRaw = (ev as any).unitIndex ?? (ev as any).unit ?? (ev as any).idx;
-  const rRaw = (ev as any).roundIndex ?? (ev as any).round ?? (ev as any).loop;
+  const prevU = BUS.lastUnit.get(fid);
+  const prevR = BUS.lastRound.get(fid);
+  const prevName = BUS.lastPhaseName.get(fid);
+  const prevSec  = BUS.lastRemainSec.get(fid);
 
-  // —— 1) 进入新单元：PHASE_ENTER 优先；否则用 unitIndex 变化 / 阶段名变化 / “剩余秒回升”兜底 ——
-  if (type === "FLOW_PHASE_ENTER") {
-    BUS.lastUnit.set(fid, (ev as any).unitIndex ?? 0);
-    BUS.lastRound.set(fid, (ev as any).roundIndex ?? 0);
-    speakUnit(fid, (ev as any).unitIndex ?? 0);
+  // —— 新单元侦测：三重兜底 ——
+  const unitChanged   = (typeof uRaw === "number" && uRaw !== prevU);
+  const nameChanged   = (!!name && prevName !== undefined && name !== prevName);
+  const secondsRewind = (typeof sec === "number" && typeof prevSec === "number" && sec > prevSec + 1);
+  if (unitChanged || nameChanged || secondsRewind) {
+    const u = (typeof uRaw === "number") ? uRaw : (prevU ?? 0);
+    BUS.lastUnit.set(fid, u);
+    const plan = BUS.planMap.get(fid);
+    const unit = plan?.units?.[u];
+    if (unit?.say && String(unit.say).trim()) BUS.audio.speak?.(unit.say); else BUS.audio.beep?.();
     BUS.lastSec.delete(fid);
   }
 
-  if (type === "FLOW_TICK") {
-    const prevU = BUS.lastUnit.get(fid);
-    const u = (typeof uRaw === "number") ? uRaw : prevU ?? 0;
-
-    const prevName = BUS.lastPhaseName.get(fid);
-    const prevSec  = BUS.lastRemainSec.get(fid);
-    const sec      = Math.max(0, Math.ceil((ev as any).remainingMs / 1000));
-
-    // 兜底1：unitIndex 变化
-    if (prevU === undefined || prevU !== u) {
-      BUS.lastUnit.set(fid, u);
-      speakUnit(fid, u);
-      BUS.lastSec.delete(fid);
-    }
-    // 兜底2：阶段名变化
-    else if (name && prevName !== undefined && name !== prevName) {
-      BUS.lastPhaseName.set(fid, name);
-      speakUnit(fid, u);
-      BUS.lastSec.delete(fid);
-    }
-    // 兜底3：剩余秒“回升”（例如切到下一单元/被调整 setSec 更大）
-    else if (typeof prevSec === "number" && sec > prevSec + 1) {
-      speakUnit(fid, u);
-      BUS.lastSec.delete(fid);
-    }
-
-    // 最后三秒蜂鸣：任何时刻都以当前剩余秒为准，支持 adjustTime 后即时生效
-    if (sec !== prevSec) {
-      BUS.lastRemainSec.set(fid, sec);
-      if (sec > 0 && sec <= 3) BUS.audio.beep?.();
-      if (sec === 0) BUS.lastSec.delete(fid);
-    }
-  }
-
-  // —— 2) 进入新一轮：事件/兜底都处理 —— 
-  if (type === "FLOW_ROUND_ENTER" || type === "ROUND_ENTER") {
-    const r = (typeof rRaw === "number") ? rRaw : ((BUS.lastRound.get(fid) ?? -1) + 1);
-    BUS.lastRound.set(fid, r);
-    const idx = (ev as any).unitIndex ?? 0;
+  // —— 新一轮侦测：事件字段或 unit 从大跳小（如回到 0）都判为新一轮 ——
+  if (typeof rRaw === "number" && rRaw !== prevR) {
+    BUS.lastRound.set(fid, rRaw);
+    const idx = (typeof uRaw === "number" ? uRaw : 0);
     BUS.lastUnit.set(fid, idx);
-    speakUnit(fid, idx);
+    const plan = BUS.planMap.get(fid);
+    const unit = plan?.units?.[idx];
+    if (unit?.say && String(unit.say).trim()) BUS.audio.speak?.(unit.say); else BUS.audio.beep?.();
+    BUS.lastSec.delete(fid);
+  } else if (typeof uRaw === "number" && typeof prevU === "number" && uRaw < prevU) {
+    const r = (prevR ?? -1) + 1;
+    BUS.lastRound.set(fid, r);
+    const idx = uRaw;
+    BUS.lastUnit.set(fid, idx);
+    const plan = BUS.planMap.get(fid);
+    const unit = plan?.units?.[idx];
+    if (unit?.say && String(unit.say).trim()) BUS.audio.speak?.(unit.say); else BUS.audio.beep?.();
     BUS.lastSec.delete(fid);
   }
 
-  // 如果 tick 时 roundIndex 有变化，也视为新一轮（不少实现是这样）
-  if (type === "FLOW_TICK" && typeof rRaw === "number") {
-    const prevR = BUS.lastRound.get(fid);
-    if (prevR === undefined || prevR !== rRaw) {
-      BUS.lastRound.set(fid, rRaw);
-      const idx = (ev as any).unitIndex ?? 0;
-      BUS.lastUnit.set(fid, idx);
-      speakUnit(fid, idx);
-      BUS.lastSec.delete(fid);
-    }
+  // —— 最后三秒蜂鸣：跟随当前剩余秒，支持 adjustTime 后即时生效 ——
+  if (typeof sec === "number" && sec !== prevSec) {
+    BUS.lastRemainSec.set(fid, sec);
+    if (sec > 0 && sec <= 3) BUS.audio.beep?.();
+    if (sec === 0) BUS.lastSec.delete(fid);
   }
 
-  if (type === "FLOW_DONE") {
+  // 记住阶段名
+  if (name) BUS.lastPhaseName.set(fid, name);
+
+  // 完成
+  if (ev.type === "FLOW_DONE") {
     BUS.lastSec.delete(fid);
     BUS.lastUnit.delete(fid);
     BUS.lastRound.delete(fid);
     BUS.audio.beep?.();
   }
-
-  // 记住最新名字（供下次比较）
-  if (name) BUS.lastPhaseName.set(fid, name);
 }
+
+function maybeSpeak(fid: string, unitIndex: number) {
+  const r = BUS.lastRound.get(fid) ?? 0;
+  const key = `${r}|${unitIndex}`;
+  const now = (typeof performance !== "undefined" && performance.now) ? performance.now() : Date.now();
+  const lastKey = BUS.speakKey.get(fid);
+  const lastAt  = BUS.speakAt.get(fid) ?? 0;
+  if (key === lastKey && (now - lastAt) < 300) return; // 去重 300ms
+
+  BUS.speakKey.set(fid, key);
+  BUS.speakAt.set(fid, now);
+
+  const plan = BUS.planMap.get(fid);
+  const unit = plan?.units?.[unitIndex];
+  if (unit?.say && String(unit.say).trim()) BUS.audio!.speak?.(unit.say);
+  else BUS.audio!.beep?.();
+}
+
 
 // 读 plan 中的 say 并播报；没有 say 就轻蜂鸣
 function speakUnit(flowId: string, unitIndex: number) {

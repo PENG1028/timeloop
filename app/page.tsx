@@ -2,85 +2,41 @@
 
 import Link from "next/link";
 import { useFlowStore } from "./_store/flows";
-import { useTimerClient, unlockGlobalAudio  } from "./_hooks/useTimerClient";
+import { useTimerClient, unlockGlobalAudio } from "./_hooks/useTimerClient";
 import type { PlanSpec } from "./_types/timer";
-import { useRef, useState, useEffect, useCallback } from "react";
-
-// ❌ 不要静态 import 音频相关（避免 SSR/Hydration 问题）
-// import { AudioEngine } from "./_lib/audio";
-// import { Prefetcher } from "./_lib/prefetcher";
+import { useState, useEffect, useCallback } from "react";
 
 export default function HomeMobile() {
-  // 1) 所有 hooks 无条件调用（禁止早退）
-  
+  // 统一挂载检测（不要在 hooks 前 return）
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
-  const planMapRef = useRef<Map<string, PlanSpec>>(new Map());
-const lastSecRef  = useRef<Map<string, number>>(new Map());
 
-  const audioRef = useRef<any>(null);
-  const prefetcherRef = useRef<any>(null);
+  // 只保留“轻量刷新”的事件订阅；播报在 useTimerClient 的全局里做
+  const [, force] = useState(0);
+  const onEvent = useCallback((ev: any) => {
+    if (
+      ev?.type === "FLOW_TICK" ||
+      ev?.type === "FLOW_PHASE_ENTER" ||
+      ev?.type === "FLOW_STATE" ||
+      ev?.type === "FLOW_DONE"
+    ) {
+      force(x => x + 1);
+    }
+  }, []);
 
-  // 2) 挂载后动态 import 音频模块
-  useEffect(() => {
-    if (!mounted) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const [{ AudioEngine }, { Prefetcher }] = await Promise.all([
-          import("./_lib/audio"),
-          import("./_lib/prefetcher"),
-        ]);
-        if (cancelled) return;
-        audioRef.current = new AudioEngine();
-        prefetcherRef.current = new Prefetcher(audioRef.current);
-      } catch (err) {
-        console.error("Audio init failed:", err);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [mounted]);
+  // 计时客户端（全局实现已处理 TTS/蜂鸣）
+  const { flows, start, pause, resume, stop } = useTimerClient(onEvent);
 
-  // 3) 正确的解锁函数（不会白屏）
-  function unlockAudio() {
-    const a = audioRef.current;
-    if (!a) return;
-    const fn =
-      (typeof a.unlock === "function" && a.unlock) ||
-      (typeof a.resume === "function" && a.resume) ||
-      (typeof a.ensureUnlocked === "function" && a.ensureUnlocked) ||
-      (a.audioContext && typeof a.audioContext.resume === "function" && a.audioContext.resume);
-    if (fn) fn.call(a);
-  }
+  // ✅ 别忘了把 store 声明出来
   const store = useFlowStore();
 
-  // 4) 订阅事件：交给音频/预取，同时轻量刷新
-  
+  // 列表数据
+  const items = store.flowIds.map(fid => ({
+    fid,
+    plan: store.getFlowPlan(fid),
+    view: flows[fid],
+  }));
 
-  const g: any = globalThis as any;
-const [isPrimary, setIsPrimary] = useState(false);
-useEffect(() => {
-  if (!mounted) return;
-  if (!g.__TL_AUDIO_PRIMARY__) {         // 尚无主控
-    g.__TL_AUDIO_PRIMARY__ = 1;
-    setIsPrimary(true);
-  }
-  return () => {
-    if (isPrimary) g.__TL_AUDIO_PRIMARY__ = 0; // 主控卸载时释放
-  };
-}, [mounted, isPrimary]);
-
-  const [, force] = useState(0);
-const onEvent = useCallback((ev: any) => {
-  if (ev?.type === "FLOW_TICK" || ev?.type === "FLOW_PHASE_ENTER" || ev?.type === "FLOW_STATE" || ev?.type === "FLOW_DONE") {
-    force((x:number)=>x+1);
-  }
-}, []);
-const { flows, start, pause, resume, stop } = useTimerClient(onEvent);
-
-  const items = store.flowIds.map(fid => ({ fid, plan: store.getFlowPlan(fid), view: flows[fid] }));
-
-  // 5) 只在 JSX 里条件渲染骨架（没有任何早退 return）
   return (
     <main className="p-4 space-y-3">
       {!mounted ? (
@@ -110,19 +66,16 @@ const { flows, start, pause, resume, stop } = useTimerClient(onEvent);
                 if (!plan) return null;
 
                 const running = !!(view && !view.paused && !view.done);
-                const paused  = !!(view && view.paused);
-                const rawPhase = view?.phaseName ?? "";
-                const phaseName = rawPhase || "—";
+                const paused = !!(view && view.paused);
+                const phaseName = view?.phaseName || "—";
 
-                // 总/剩：按 unitIndex 从 plan 取总秒；剩余来自 remainingMs
-                const idx = typeof view?.unitIndex === "number" ? view!.unitIndex : 0;
-                const totalSec = plan.units[idx]?.seconds ?? 0;
+                // N / 剩余：从 plan 的当前单元取总秒，从 view 取剩余
+                const idx = typeof view?.unitIndex === "number" ? view.unitIndex : 0;
+                const totalSecFromIdx = plan.units[idx]?.seconds ?? 0;
+                const fallbackTotal = plan.units.find(u => u.name === (view?.phaseName ?? ""))?.seconds ?? 0;
+                const totalSec = totalSecFromIdx || fallbackTotal;
                 const remainSec = view ? Math.max(0, Math.ceil(view.remainingMs / 1000)) : 0;
-                const fixedTotalSec = totalSec > 0 ? totalSec : (() => {
-                  const byName = plan.units.find(u => u.name === (view?.phaseName ?? ""));
-                  return byName?.seconds ?? 0;
-                })();
-                const timeStr = `${fixedTotalSec} / ${remainSec}`;
+                const timeStr = `${totalSec} / ${remainSec}`;
                 const roundStr = view ? `${(view.roundIndex ?? -1) + 1}/${plan.rounds}` : `0/${plan.rounds}`;
 
                 return (
@@ -155,31 +108,40 @@ const { flows, start, pause, resume, stop } = useTimerClient(onEvent);
                         <button
                           className="px-3 py-2 rounded-lg bg-emerald-600 text-white"
                           onClick={() => {
-                            unlockGlobalAudio();   
-                            prefetcherRef.current?.onStart?.(fid, plan as PlanSpec);
-                            planMapRef.current.set(fid, plan as PlanSpec);
+                            unlockGlobalAudio();      // 统一解锁
                             start(fid, plan as PlanSpec);
                           }}
                         >
                           开始
                         </button>
                       )}
+
                       {running && (
-                        <button className="px-3 py-2 rounded-lg bg-slate-900 text-white/90" onClick={() => pause(fid)}>
+                        <button
+                          className="px-3 py-2 rounded-lg bg-slate-900 text-white/90"
+                          onClick={() => pause(fid)}
+                        >
                           暂停
                         </button>
                       )}
+
                       {paused && (
                         <>
                           <button
                             className="px-3 py-2 rounded-lg bg-emerald-600 text-white"
-                            onClick={() => { unlockGlobalAudio(); resume(fid); }}
+                            onClick={() => { unlockGlobalAudio(); resume(fid); }} // 暂停后应使用 resume
                           >
                             开始
                           </button>
-                          <button className="px-3 py-2 rounded-lg bg-rose-600 text-white" onClick={() => stop(fid)}>停止</button>
+                          <button
+                            className="px-3 py-2 rounded-lg bg-rose-600 text-white"
+                            onClick={() => stop(fid)}
+                          >
+                            停止
+                          </button>
                         </>
                       )}
+
                       <Link className="px-3 py-2 rounded-lg bg-slate-200 dark:bg-white/10 text-center" href={`/flows/${fid}`}>
                         详情
                       </Link>
@@ -192,8 +154,6 @@ const { flows, start, pause, resume, stop } = useTimerClient(onEvent);
                         onClick={() => {
                           if (confirm(`确认删除流程「${plan.title}」？此操作不可恢复。`)) {
                             stop(fid);
-                            planMapRef.current.delete(fid);
-                            lastSecRef.current.delete(fid);
                             store.detachFlow(fid);
                           }
                         }}

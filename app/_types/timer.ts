@@ -23,7 +23,7 @@ export type Command =
   | { type: "ADJUST_TIME"; flowId: string; scope: Scope; deltaSec?: number; setSec?: number };
 
 export type Event =
-  | { type: "FLOW_PHASE_ENTER"; flowId: string; unitIndex: number; roundIndex: number; phaseName: string; endsAt: number; totalMs: number }
+  | { type: "FLOW_PHASE_ENTER"; flowId: string; unitIndex: number; roundIndex: number; phaseName: string; endsAt: number; totalMs: number; remainingMs:number }
   | { type: "FLOW_TICK"; flowId: string; remainingMs: number; phaseName: string; unitIndex: number; roundIndex: number }
   | { type: "FLOW_STATE"; flowId: string; paused: boolean; done: boolean }
   | { type: "FLOW_DONE"; flowId: string }
