@@ -14,7 +14,7 @@ type Props = {
   mode: "flow" | "template"; // 流程页可显示「从模板载入」
   draft: PlanDraft;
   setDraft: (d: PlanDraft) => void;
-  onConfirm: () => void;      // 右下角「确认」
+  onConfirm: (d: PlanDraft) => void;   // 右下角「确认」
   onCancel: () => void;       // 左下角「取消」
   templateOptions?: { id: string; title: string }[];
   onLoadTemplate?: (id: string) => void;
@@ -29,7 +29,7 @@ export default function PlanEditor({
   function add(){ setDraft({...draft, units:[...draft.units, { name:"", seconds:0 }]}); }
   function del(i:number){ setDraft({...draft, units: draft.units.filter((_,idx)=>idx!==i)}); }
 
-  const ok = useMemo(()=>{
+  const ok = useMemo(() => {
     if (!draft.title.trim()) return false;
     if (!Number.isFinite(draft.rounds) || draft.rounds < 1) return false;
     if (!draft.units.length) return false;
@@ -93,6 +93,17 @@ export default function PlanEditor({
     />
   </div>
 </div>
+<div className="mt-3">
+  <label className="text-sm opacity-70">播报文案（可选）</label>
+  <input
+    type="text"
+    className="mt-1 w-full rounded-lg border px-3 py-2 bg-transparent"
+    placeholder={u.name || "例如：准备开始"}
+    value={u.say ?? ""}                       // ✅ 用 say
+    onChange={(e) => setUnit(i, { say: e.target.value })} // ✅ 写 say
+  />
+  <p className="mt-1 text-xs opacity-60">留空则默认播报单元名称</p>
+</div>
               </div>
               <div className="flex gap-2">
                 <button className="px-3 py-2 rounded-lg bg-slate-900 text-white/90" onClick={()=>up(i)}>上移</button>
@@ -109,19 +120,23 @@ export default function PlanEditor({
         </button>
       </div>
 
-      {/* 底部固定操作条（左取消 / 右确认，确认需通过校验） */}
-      <div className="fixed left-0 right-0 bottom-0 z-20 bg-white/95 dark:bg-slate-900/95 border-t border-slate-200/60 dark:border-white/10 px-4 py-3"
-           style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 12px)" }}>
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <button className="px-4 py-3 rounded-xl bg-slate-200 dark:bg-white/10" onClick={onCancel}>取消</button>
-          <button
-            className={`px-4 py-3 rounded-xl ${ok?"bg-emerald-600 text-white":"bg-slate-300 text-slate-500 cursor-not-allowed"}`}
-            disabled={!ok}
-            onClick={ok ? onConfirm : undefined}
-          >
-            确认
-          </button>
-        </div>
+      {/* 底部确认/取消操作条 —— 确保按钮都有 type="button" 防止表单提交劫持 */}
+      <div className="fixed bottom-0 left-0 right-0 p-3 bg-white/80 dark:bg-slate-900/60 backdrop-blur border-t border-slate-200/60 dark:border-white/10 flex gap-2 justify-end">
+        <button
+          type="button"
+          className="px-3 py-2 rounded-lg bg-slate-200 dark:bg-white/10"
+          onClick={onCancel}
+        >
+          取消
+        </button>
+        <button
+          type="button"
+          disabled={!ok}
+          className="px-3 py-2 rounded-lg bg-emerald-600 text-white disabled:opacity-50"
+          onClick={() => onConfirm(draft)}   // ← 传入当前草稿
+        >
+          完成
+        </button>
       </div>
     </div>
   );

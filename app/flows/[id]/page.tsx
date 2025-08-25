@@ -1,16 +1,62 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
 import { useRouter } from "next/navigation";
 import { useFlowStore } from "../../_store/flows";
 import { useTimerClient, unlockGlobalAudio } from "../../_hooks/useTimerClient";
 import type { PlanSpec } from "../../_types/timer";
 import PlanEditor, { type PlanDraft } from "../../_components/PlanEditor";
 import { formatDurationEn, formatCountdownClock } from "../../_lib/duration";
-import DurationPicker from "../../_components/DurationPicker"; // 顶部 import，一次即可
 import RoundsStepper from "../../_components/RoundsStepper";
 
 
+// 简单 TTS：先用浏览器自带语音，确保“有声”
+// ===== Robust Speech Controller v2 =====
+class SpeechController {
+  private token = 0;
+
+  play(text: string, opts?: { lang?: string; rate?: number; pitch?: number; voiceHint?: string }) {
+    if (!text || typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    const id = ++this.token;
+    const synth = window.speechSynthesis;
+
+    try { synth.cancel(); } catch {}
+
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = opts?.lang ?? "zh-CN";
+    u.rate = opts?.rate ?? 1;
+    u.pitch = opts?.pitch ?? 1;
+
+    try {
+      const voices = synth.getVoices();
+      const pick = voices.find(v => (opts?.voiceHint ? v.name === opts.voiceHint : v.lang?.startsWith(u.lang)));
+      if (pick) u.voice = pick;
+    } catch {}
+
+    u.onend = () => { /* 可选：上报结束 */ };
+    u.onerror = () => { /* 可选：上报错误 */ };
+
+    synth.speak(u);
+  }
+
+  stop() {
+    this.token++;
+    try { window.speechSynthesis?.cancel?.(); } catch {}
+  }
+}
+
+
+// 单例（跨 effect 复用）
+const speech = typeof window !== "undefined"
+  ? ((window as any).__speechCtl ?? ((window as any).__speechCtl = new SpeechController()))
+  : null;
+
+// 取播报文本：优先 say，其次 name
+function getSayText(u: any): string {
+  const t = (u?.say ?? u?.name ?? "").toString();
+  return t.trim();
+}
 
 
 function msToSec(ms: number) {
@@ -18,6 +64,8 @@ function msToSec(ms: number) {
 }
 
 export default function FlowDetailEditPage({ params }: { params: { id: string } }) {
+
+  
   const [mounted, setMounted] = useState(false);
 
 
@@ -54,7 +102,8 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
     rounds: plan?.rounds ?? 1,
     units: plan?.units ?? [],
   }));
-
+  const lastSpokenKeyRef = useRef<string>("");
+  const speakDebounceRef = useRef<number | null>(null); // ✅ 新增
 
   // 顶部：运行状态
   const view = flows[params.id];
@@ -107,28 +156,80 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
     try { localStorage.setItem(`plan:${id}`, JSON.stringify(plan)); } catch { }
   }
 
+const unitsSig = useCallback((arr: any[] = []) => JSON.stringify(
+  arr.map(u => ({ n: u?.name ?? "", s: u?.seconds ?? 0, y: u?.say ?? "" }))
+), []);
 
+const lastPhaseRef = useRef<string>("");
 
+useEffect(() => {
+  if (!plan || !draft?.units) return;
+  // 只在进入新阶段(轮次/单元发生变化)时同步一次
+  const phaseKey = `${view?.roundIndex ?? -1}-${view?.unitIndex ?? -1}`;
+  if (phaseKey === lastPhaseRef.current) return;
+  lastPhaseRef.current = phaseKey;
 
-  // 当 plan 首次就绪时，同步一次草稿（避免 FOUC）
-  useEffect(() => {
-    if (!plan) return;
-    setDraft({ title: plan.title, rounds: plan.rounds, units: plan.units });
-  }, [plan]);
-
-  function savePlan() {
-    if (!plan) return;
-    const next: PlanSpec = {
-      ...plan,
-      title: draft.title,
-      rounds: draft.rounds,
-      units: draft.units,
-      prepare: 0,
-      betweenRounds: 0,
-    };
-    store.updateFlowPlan(params.id, next);
-    router.push("/");
+  const sigPlan = unitsSig(plan.units);
+  const sigDraft = unitsSig(draft.units);
+  if (sigPlan !== sigDraft) {
+    // 进入下一阶段前，把草稿的 units 一次性写回计划：
+    store.updateFlowPlan(params.id, { ...plan, units: draft.units });
   }
+}, [view?.roundIndex, view?.unitIndex, plan, draft?.units, params.id, store, unitsSig]);
+
+
+
+
+
+const lastAppliedSecRef = useRef<number | null>(null);
+
+
+// 放在组件内部
+
+useEffect(() => {
+  // 非运行中一律不播 & 立刻打断可能的尾音
+  if (!view || view.paused || view.done) {
+    speech?.stop();
+    return;
+  }
+
+  const uidx = typeof view.unitIndex === "number" ? view.unitIndex : -1;
+  if (uidx < 0) return;
+
+  // ✅ 草稿优先；这样你在详情页底部改文案/新增单元会马上用上
+  const units = (draft?.units?.length ? draft.units : (plan?.units ?? []));
+  const u = units[uidx];
+  const text = (u?.say ?? u?.name ?? "").toString().trim();
+  if (!text) return;
+
+  // 🔑 去重键：轮次-单元-文本；任何一项变化都会触发重新播
+  const key = `${view.roundIndex ?? 0}-${uidx}-${text}`;
+  if (lastSpokenKeyRef.current === key) return;
+
+  // 轻防抖，避免你连续输入每个字都播
+  if (speakDebounceRef.current) window.clearTimeout(speakDebounceRef.current);
+  speakDebounceRef.current = window.setTimeout(() => {
+    lastSpokenKeyRef.current = key;
+    try { unlockGlobalAudio(); } catch {}
+    // 直接“打断上一条→播当前条”，避免被“等待完全静音”的逻辑卡住
+    speech?.stop();
+    speech?.play(text);
+  }, 180);
+
+  return () => {
+    if (speakDebounceRef.current) {
+      window.clearTimeout(speakDebounceRef.current);
+      speakDebounceRef.current = null;
+    }
+  };
+}, [
+  draft?.units,           // 改文案/新增单元 → 立即播新文本
+  plan?.units,
+  view?.unitIndex,        // 切到下一个单元
+  view?.roundIndex,       // 新一轮开始
+  view?.paused, view?.done
+]);
+
 
   const handleChangeRounds = (nextRounds: number) => {
     if (!plan) return;
@@ -148,6 +249,28 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
       // markStopped(params.id, true);
     }
   }
+
+  // ✅ 新增：把草稿保存为计划（包含 say 字段）
+  // ✅ 替换你的 savePlan
+  const savePlan = useCallback((d?: PlanDraft) => {
+    const src = d ?? draft; // 万一忘了传参，也不会清空
+    const nextPlan: PlanSpec = {
+      title: (src.title ?? "").trim(),
+      rounds: Math.max(1, Number(src.rounds) || 1),
+      units: (src.units ?? []).map((u: any) => ({
+        name: (u.name ?? "").trim(),
+        seconds: Math.max(1, Number(u.seconds) || 1),
+        say: (u.say ?? "").trim(),
+      })),
+    };
+
+    store.updateFlowPlan(params.id, nextPlan);
+    setDraft(prev => ({ ...prev, ...nextPlan })); // 让编辑器立即同步
+    try { localStorage.setItem(`plan:${params.id}`, JSON.stringify(nextPlan)); } catch { }
+
+    router.push("/"); // ← 保存后返回流程页（如你的列表不在根，请改成实际路由）
+  }, [params.id, store, draft, router]);
+
 
   return (
     <main className="p-4 space-y-4">
@@ -231,6 +354,7 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
                     onClick={() => {
                       markStopped(params.id, false);  // ✅ 清除本地已停止
                       unlockGlobalAudio();
+                      lastSpokenKeyRef.current = "";  lastSpokenKeyRef.current = "";   // ← 新增：强制下一帧播 // ← 新增：强制下一帧播
                       start(params.id, plan);
                     }}
                   >
@@ -274,6 +398,7 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
                     onClick={() => {
                       markStopped(params.id, false);  // ✅ 清除本地已停止
                       unlockGlobalAudio();
+                      lastSpokenKeyRef.current = "";   // ← 新增：强制下一帧播
                       resume(params.id);
                     }}
                   >
@@ -371,7 +496,7 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
             mode="flow"
             draft={draft}
             setDraft={setDraft}
-            onConfirm={savePlan}
+            onConfirm={(d) => savePlan(d)}   // ← 明确把草稿传给 savePlan
             onCancel={() => router.back()}
           />
         </>
