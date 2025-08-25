@@ -7,35 +7,20 @@ import type { PlanSpec } from "./_types/timer";
 import { useState, useEffect, useCallback } from "react";
 
 export default function HomeMobile() {
-  // 统一挂载检测（不要在 hooks 前 return）
   const [mounted, setMounted] = useState(false);
   useEffect(() => { setMounted(true); }, []);
 
-  // 只保留“轻量刷新”的事件订阅；播报在 useTimerClient 的全局里做
-  const [, force] = useState(0);
-  const onEvent = useCallback((ev: any) => {
-    if (
-      ev?.type === "FLOW_TICK" ||
-      ev?.type === "FLOW_PHASE_ENTER" ||
-      ev?.type === "FLOW_STATE" ||
-      ev?.type === "FLOW_DONE"
-    ) {
-      force(x => x + 1);
-    }
-  }, []);
 
-  // 计时客户端（全局实现已处理 TTS/蜂鸣）
-  const { flows, start, pause, resume, stop } = useTimerClient(onEvent);
-
-  // ✅ 别忘了把 store 声明出来
+  // 首页 app/page.tsx 现在既依赖 flows 又用 force(x=>x+1) 的 onEvent 强制刷新，等于每个事件双倍重渲染，列表多时会明显卡。解决：删掉 onEvent/force，只依赖 flows。
+  // const [, force] = useState(0);
+  // const onEvent = useCallback((ev: any) => {
+  //   if (ev?.type === "FLOW_TICK" || ev?.type === "FLOW_PHASE_ENTER" || ev?.type === "FLOW_STATE" || ev?.type === "FLOW_DONE") {
+  //     force(x => x + 1);
+  //   }
+  // }, []);
+  const { flows, start, pause, resume, stop } = useTimerClient();
   const store = useFlowStore();
-
-  // 列表数据
-  const items = store.flowIds.map(fid => ({
-    fid,
-    plan: store.getFlowPlan(fid),
-    view: flows[fid],
-  }));
+  const items = store.flowIds.map(fid => ({ fid, plan: store.getFlowPlan(fid), view: flows[fid] }));
 
   return (
     <main className="p-4 space-y-3">
@@ -46,7 +31,6 @@ export default function HomeMobile() {
         </>
       ) : (
         <>
-          {/* 顶部入口 */}
           <div className="flex items-center justify-between">
             <div className="text-lg font-semibold">流程</div>
             <div className="flex gap-2">
@@ -55,7 +39,6 @@ export default function HomeMobile() {
             </div>
           </div>
 
-          {/* 列表 */}
           {items.length === 0 ? (
             <Link href="/flows/new" className="block rounded-2xl border-2 border-dashed p-10 text-center text-slate-500">
               还没有流程，点这里快速创建
@@ -64,19 +47,20 @@ export default function HomeMobile() {
             <div className="space-y-3">
               {items.map(({ fid, plan, view }) => {
                 if (!plan) return null;
-
                 const running = !!(view && !view.paused && !view.done);
-                const paused = !!(view && view.paused);
+                const paused  = !!(view && view.paused);
                 const phaseName = view?.phaseName || "—";
 
-                // N / 剩余：从 plan 的当前单元取总秒，从 view 取剩余
                 const idx = typeof view?.unitIndex === "number" ? view.unitIndex : 0;
-                const totalSecFromIdx = plan.units[idx]?.seconds ?? 0;
-                const fallbackTotal = plan.units.find(u => u.name === (view?.phaseName ?? ""))?.seconds ?? 0;
-                const totalSec = totalSecFromIdx || fallbackTotal;
-                const remainSec = view ? Math.max(0, Math.ceil(view.remainingMs / 1000)) : 0;
-                const timeStr = `${totalSec} / ${remainSec}`;
-                const roundStr = view ? `${(view.roundIndex ?? -1) + 1}/${plan.rounds}` : `0/${plan.rounds}`;
+                const plannedSec = plan.units[idx]?.seconds ?? 0;
+                const remainSec  = view ? Math.max(0, Math.ceil(view.remainingMs / 1000)) : 0;
+
+                const deltaSec = Math.round((view?.addedMs ?? 0) / 1000);
+                const deltaTag = deltaSec === 0 ? null : (
+                  <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${deltaSec>0 ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                    {deltaSec>0 ? `+${deltaSec}s` : `${deltaSec}s`}
+                  </span>
+                );
 
                 return (
                   <div key={fid} className="rounded-2xl p-3 border border-slate-200/60 dark:border-white/10 bg-white/80 dark:bg-white/5">
@@ -94,62 +78,72 @@ export default function HomeMobile() {
                       </div>
                       <div className="text-center">
                         <div className="opacity-60 text-xs">时间（总/剩）</div>
-                        <div className="text-2xl font-semibold tabular-nums">{timeStr}</div>
+                        <div className="text-2xl font-semibold tabular-nums">
+                          {plannedSec} / {remainSec}{deltaTag}
+                        </div>
                       </div>
                       <div className="text-right text-sm">
                         <div className="opacity-60">轮次</div>
-                        <div className="font-semibold">{roundStr}</div>
+                        <div className="font-semibold">{view ? `${(view.roundIndex ?? -1) + 1}/${plan.rounds}` : `0/${plan.rounds}`}</div>
                       </div>
                     </div>
 
-                    {/* 操作区 */}
+                    {/* 按钮三态：互斥渲染，全部加 type="button" 防止表单提交劫持 */}
                     <div className="mt-3 grid grid-cols-3 gap-2">
-                      {(!view || view.done) && (
-                        <button
-                          className="px-3 py-2 rounded-lg bg-emerald-600 text-white"
-                          onClick={() => {
-                            unlockGlobalAudio();      // 统一解锁
-                            start(fid, plan as PlanSpec);
-                          }}
-                        >
-                          开始
-                        </button>
-                      )}
-
-                      {running && (
-                        <button
-                          className="px-3 py-2 rounded-lg bg-slate-900 text-white/90"
-                          onClick={() => pause(fid)}
-                        >
-                          暂停
-                        </button>
-                      )}
-
-                      {paused && (
+                      {(!view || view.done) ? (
                         <>
-                          <button
+                          <button type="button"
                             className="px-3 py-2 rounded-lg bg-emerald-600 text-white"
-                            onClick={() => { unlockGlobalAudio(); resume(fid); }} // 暂停后应使用 resume
+                            onClick={() => { unlockGlobalAudio(); start(fid, plan as PlanSpec); }}
                           >
                             开始
                           </button>
-                          <button
+                          <Link className="px-3 py-2 rounded-lg bg-slate-200 dark:bg-white/10 text-center" href={`/flows/${fid}`}>
+                            详情
+                          </Link>
+                        </>
+                      ) : paused ? (
+                        <>
+                          <button type="button"
+                            className="px-3 py-2 rounded-lg bg-emerald-600 text-white"
+                            onClick={() => { unlockGlobalAudio(); resume(fid); }}
+                          >
+                            继续
+                          </button>
+                          <button type="button"
                             className="px-3 py-2 rounded-lg bg-rose-600 text-white"
                             onClick={() => stop(fid)}
                           >
                             停止
                           </button>
+                          <Link className="px-3 py-2 rounded-lg bg-slate-200 dark:bg-white/10 text-center" href={`/flows/${fid}`}>
+                            详情
+                          </Link>
+                        </>
+                      ) : (
+                        <>
+                          <button type="button"
+                            className="px-3 py-2 rounded-lg bg-slate-900 text-white/90"
+                            onClick={() => pause(fid)}
+                          >
+                            暂停
+                          </button>
+                          <button type="button"
+                            className="px-3 py-2 rounded-lg bg-rose-600 text-white"
+                            onClick={() => stop(fid)}
+                          >
+                            停止
+                          </button>
+                          <Link className="px-3 py-2 rounded-lg bg-slate-200 dark:bg-white/10 text-center" href={`/flows/${fid}`}>
+                            详情
+                          </Link>
                         </>
                       )}
-
-                      <Link className="px-3 py-2 rounded-lg bg-slate-200 dark:bg-white/10 text-center" href={`/flows/${fid}`}>
-                        详情
-                      </Link>
                     </div>
 
                     <div className="mt-2 flex justify-between text-xs opacity-70">
                       <div className="truncate">{plan.units.map(u => `${u.name}(${u.seconds}s)`).join(" · ")}</div>
-                      <button
+                      <button type="button"
                         className="underline text-rose-600"
                         onClick={() => {
                           if (confirm(`确认删除流程「${plan.title}」？此操作不可恢复。`)) {
