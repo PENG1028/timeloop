@@ -4,10 +4,17 @@ import Link from "next/link";
 import { useFlowStore } from "./_store/flows";
 import { useTimerClient, unlockGlobalAudio } from "./_hooks/useTimerClient";
 import type { PlanSpec } from "./_types/timer";
-import { useState, useEffect, useCallback } from "react";
+import { formatDurationEn, formatCountdownClock } from "./_lib/duration";
+import { useState, useEffect, useCallback } from "react"; // 你原本已有
 
 export default function HomeMobile() {
   const [mounted, setMounted] = useState(false);
+  // 让【停止】后按钮立刻切换为【开始】；等下一次真正 start 时再清除标记
+  const [stoppedFlags, setStoppedFlags] = useState<Record<string, boolean>>({});
+  const markStopped = useCallback((fid: string, val: boolean) => {
+    setStoppedFlags(prev => ({ ...prev, [fid]: val }));
+  }, []);
+
   useEffect(() => { setMounted(true); }, []);
 
 
@@ -48,19 +55,22 @@ export default function HomeMobile() {
               {items.map(({ fid, plan, view }) => {
                 if (!plan) return null;
                 const running = !!(view && !view.paused && !view.done);
-                const paused  = !!(view && view.paused);
+                const paused = !!(view && view.paused);
                 const phaseName = view?.phaseName || "—";
 
                 const idx = typeof view?.unitIndex === "number" ? view.unitIndex : 0;
                 const plannedSec = plan.units[idx]?.seconds ?? 0;
-                const remainSec  = view ? Math.max(0, Math.ceil(view.remainingMs / 1000)) : 0;
+                const remainSec = view ? Math.max(0, Math.ceil(view.remainingMs / 1000)) : 0;
 
                 const deltaSec = Math.round((view?.addedMs ?? 0) / 1000);
                 const deltaTag = deltaSec === 0 ? null : (
-                  <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${deltaSec>0 ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
-                    {deltaSec>0 ? `+${deltaSec}s` : `${deltaSec}s`}
+                  <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${deltaSec > 0 ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                    {deltaSec > 0 ? `+${deltaSec}s` : `${deltaSec}s`}
                   </span>
                 );
+
+                const uxStopped = !!stoppedFlags[fid];               // 本地“已停止”标记
+                const showStop = (!!view && view.done) || (uxStopped && !running && !paused); // 仅流程完全结束，或用户点过“停止”且当前不在运行/暂停
 
                 return (
                   <div key={fid} className="rounded-2xl p-3 border border-slate-200/60 dark:border-white/10 bg-white/80 dark:bg-white/5">
@@ -79,7 +89,19 @@ export default function HomeMobile() {
                       <div className="text-center">
                         <div className="opacity-60 text-xs">时间（总/剩）</div>
                         <div className="text-2xl font-semibold tabular-nums">
-                          {plannedSec} / {remainSec}{deltaTag}
+                          {/* ✅ 完全结束只显示 STOP；否则“总 / 剩” */}
+                          {(!!view && view.done) ? (
+                            <div className="text-2xl font-semibold tabular-nums">
+                              <span className="font-semibold tracking-wide text-rose-600 dark:text-rose-400">STOP</span>
+                            </div>
+                          ) : (
+                            <div className="text-2xl font-semibold tabular-nums">
+                              {formatDurationEn(plannedSec)}
+                              <span className="mx-1"> / </span>
+                              <span>{formatCountdownClock(remainSec)}</span>
+                              {deltaTag}
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div className="text-right text-sm">
@@ -90,11 +112,16 @@ export default function HomeMobile() {
 
                     {/* 按钮三态：互斥渲染，全部加 type="button" 防止表单提交劫持 */}
                     <div className="mt-3 grid grid-cols-3 gap-2">
-                      {(!view || view.done) ? (
+                      {(!view || view.done || uxStopped) ? (
                         <>
-                          <button type="button"
+                          <button
+                            type="button"
                             className="px-3 py-2 rounded-lg bg-emerald-600 text-white"
-                            onClick={() => { unlockGlobalAudio(); start(fid, plan as PlanSpec); }}
+                            onClick={() => {
+                              markStopped(fid, false);              // ✅ 清除本地“已停止”
+                              unlockGlobalAudio();
+                              start(fid, plan as PlanSpec);
+                            }}
                           >
                             开始
                           </button>
@@ -104,15 +131,24 @@ export default function HomeMobile() {
                         </>
                       ) : paused ? (
                         <>
-                          <button type="button"
+                          <button
+                            type="button"
                             className="px-3 py-2 rounded-lg bg-emerald-600 text-white"
-                            onClick={() => { unlockGlobalAudio(); resume(fid); }}
+                            onClick={() => {
+                              markStopped(fid, false);              // ✅ 恢复时也清掉本地“已停止”
+                              unlockGlobalAudio();
+                              resume(fid);
+                            }}
                           >
                             继续
                           </button>
-                          <button type="button"
+                          <button
+                            type="button"
                             className="px-3 py-2 rounded-lg bg-rose-600 text-white"
-                            onClick={() => stop(fid)}
+                            onClick={() => {
+                              stop(fid);
+                              markStopped(fid, true);               // ✅ 立刻把 UI 切到“开始”
+                            }}
                           >
                             停止
                           </button>
@@ -122,15 +158,20 @@ export default function HomeMobile() {
                         </>
                       ) : (
                         <>
-                          <button type="button"
+                          <button
+                            type="button"
                             className="px-3 py-2 rounded-lg bg-slate-900 text-white/90"
                             onClick={() => pause(fid)}
                           >
                             暂停
                           </button>
-                          <button type="button"
+                          <button
+                            type="button"
                             className="px-3 py-2 rounded-lg bg-rose-600 text-white"
-                            onClick={() => stop(fid)}
+                            onClick={() => {
+                              stop(fid);
+                              markStopped(fid, true);               // ✅ 立刻切换到“开始”
+                            }}
                           >
                             停止
                           </button>

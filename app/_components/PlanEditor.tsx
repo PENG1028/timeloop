@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import type { UnitSpec } from "../_types/timer";
+import DurationPicker from "./DurationPicker"; // 按你的目录调整相对路径
 
 export type PlanDraft = {
   title: string;
@@ -81,17 +82,17 @@ export default function PlanEditor({
                      value={u.name} onChange={e=>setUnit(i,{name:e.target.value})}/>
               <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <label className="text-sm opacity-70">时长（秒，≥1）</label>
-                  <input type="number" min={1} className="mt-1 rounded-xl border px-3 py-2 text-base bg-transparent"
-                         placeholder="例如：20"
-                         value={u.seconds} onChange={e=>setUnit(i,{seconds:Number(e.target.value)||0})}/>
-                </div>
-                <div className="col-span-2">
-                  <label className="text-sm opacity-70">播报文案（可选）</label>
-                  <input className="mt-1 rounded-xl border px-3 py-2 text-base bg-transparent"
-                         placeholder="例如：开始射击 / 休息十秒"
-                         value={u.say ?? ""} onChange={e=>setUnit(i,{say: e.target.value || undefined})}/>
-                </div>
+  <label className="text-sm opacity-70">时长</label>
+  <div className="mt-1">
+    <DurationPicker
+      seconds={u.seconds}
+      onChange={(v) => {
+        if (v < 1) v = 1;            // 保持 ≥1 的规则
+        setUnit(i, { seconds: v });  // ✅ 这里用 setUnit，而不是 updateUnit
+      }}
+    />
+  </div>
+</div>
               </div>
               <div className="flex gap-2">
                 <button className="px-3 py-2 rounded-lg bg-slate-900 text-white/90" onClick={()=>up(i)}>上移</button>
