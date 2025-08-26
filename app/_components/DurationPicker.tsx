@@ -54,12 +54,11 @@ export default function DurationPicker({ seconds, onChange, label, maxHours = 99
                             <div className="text-sm font-medium tracking-wide">设置时长</div>
                         </div>
 
-                        <div className="mt-4 grid grid-cols-3 gap-3 relative">
-                            {/* 中心高亮槽：outline 不改变布局，避免半像素偏差 */}
-                            <div className="pointer-events-none absolute left-0 right-0 top-1/2 -translate-y-1/2 h-10 rounded-md border border-emerald-500/70" />
-                            <Wheel ref={hRef} label="H" initial={h0} min={0} max={maxHours} />
-                            <Wheel ref={mRef} label="M" initial={m0} min={0} max={59} />
-                            <Wheel ref={sRef} label="S" initial={s0} min={0} max={59} />
+                        <div className="mt-2 relative grid grid-cols-3 gap-3">
+                            <div className="pointer-events-none absolute inset-x-0 top-1/2 -translate-y-1/2 h-10 rounded-md ring-1 ring-inset ring-emerald-500/70" />
+                            <Wheel ref={hRef} initial={h0} min={0} max={maxHours} />
+                            <Wheel ref={mRef} initial={m0} min={0} max={59} />
+                            <Wheel ref={sRef} initial={s0} min={0} max={59} />
                         </div>
 
                         <div className="mt-4 flex justify-end gap-2">
@@ -95,9 +94,11 @@ function Dialog({ children, onClose }: { children: React.ReactNode; onClose: () 
 /* ---------------- Wheel（修复重声明 setScrollToValue） ---------------- */
 
 const ITEM_H = 40;   // 对齐 h-10
-const REPEAT = 80;   // 无限列表重复段数
+const REPEAT = 8;   // 无限列表重复段数
 const STOP_MS = 120; // 停止判定
 const SNAP_MS = 180; // 吸附动画时长
+
+const BIAS_PX = 0; // 数字“视觉中心”上移补偿；常见取值 0.5–1.0，可按设备微调 10
 
 type WheelHandle = {
     read: () => number;           // 最近一次确定的值
@@ -131,7 +132,7 @@ const Wheel = forwardRef(function Wheel(
     const measureCenter = useCallback(() => {
         const el = elRef.current;
         if (!el) return;
-        centerOffset.current = Math.round(el.clientHeight / 2 - ITEM_H / 2);
+        centerOffset.current = (el.clientHeight - ITEM_H) / 2;
     }, []);
     useLayoutEffect(measureCenter, []);
     useEffect(() => {
@@ -188,7 +189,7 @@ const Wheel = forwardRef(function Wheel(
         for (let i = first; i <= last; i++) {
             const d = Math.abs(i - center);
             const scale = Math.max(0.9, 1 - d * 0.05);
-            (children[i] as HTMLElement).style.transform = `scale(${scale})`;
+            (children[i] as HTMLElement).style.transform = `translateY(-${BIAS_PX}px) scale(${scale})`;
         }
     }, [items.length]);
 
@@ -207,6 +208,7 @@ const Wheel = forwardRef(function Wheel(
             if (p < 1) {
                 rafSnap.current = requestAnimationFrame(step);
             } else {
+                el.scrollTop = Math.round(end);
                 isSnappingRef.current = false;
                 // 边缘无感回中段
                 if (index < range * 2 || index > TOTAL - range * 2) {
@@ -214,7 +216,7 @@ const Wheel = forwardRef(function Wheel(
                     const idxInRange = (val - min + range) % range;
                     const midIdx = MID_START + idxInRange;
                     suppressNextScrollRef.current = true;
-                    el.scrollTop = midIdx * ITEM_H - centerOffset.current;
+                    el.scrollTop = Math.round(midIdx * ITEM_H - centerOffset.current);
                     requestAnimationFrame(() => { suppressNextScrollRef.current = false; });
                 }
             }
@@ -280,13 +282,14 @@ const Wheel = forwardRef(function Wheel(
 
     return (
         <div className="text-center select-none">
-            <div className="mb-2 text-xs text-slate-500">{label}</div>
             <div
                 ref={elRef}
                 tabIndex={0}
                 onKeyDown={onKeyDown}
                 className="relative mx-auto h-[200px] w-full overflow-y-auto [scrollbar-width:none] [-ms-overflow-style:none] will-change-scroll"
                 style={{
+                    textRendering: "geometricPrecision",
+                    WebkitFontSmoothing: "antialiased",
                     WebkitOverflowScrolling: "touch",
                     overscrollBehavior: "contain",
                     WebkitMaskImage: "linear-gradient(to bottom, transparent 0, black 20%, black 80%, transparent 100%)",
@@ -297,8 +300,11 @@ const Wheel = forwardRef(function Wheel(
                 <div>
                     {items.map((n, i) => (
                         <div
-                            className="h-10 leading-[40px] flex items-center justify-center text-lg tabular-nums transition-transform duration-100"
-                            style={{ transform: "scale(0.95)", transformOrigin: "50% 50%" }}
+                            key={i}
+                            className="h-10 leading-[40px] text-lg tabular-nums text-center transition-transform duration-100"
+                            style={{
+                                transformOrigin: "50% 50%"
+                            }}
                         >
                             {n.toString().padStart(2, "0")}
                         </div>
