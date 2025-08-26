@@ -20,7 +20,8 @@ export type Command =
   | { type: "STOP"; flowId: string }
   | { type: "NEXT_UNIT"; flowId: string }
   | { type: "NEXT_ROUND"; flowId: string }
-  | { type: "ADJUST_TIME"; flowId: string; scope: Scope; deltaSec?: number; setSec?: number };
+  | { type: "ADJUST_TIME"; flowId: string; scope: "current"; deltaSec?: number; setSec?: number }
+  | { type: "SYNC_PLAN"; flowId: string; payload: Partial<PlanSpec> };
 
 export type Event =
   | { type: "FLOW_PHASE_ENTER"; flowId: string; unitIndex: number; roundIndex: number; phaseName: string; endsAt: number; totalMs: number; remainingMs:number }

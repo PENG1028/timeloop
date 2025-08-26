@@ -53,20 +53,29 @@ export function useFlowStore() {
   }
 
   // —— 流程实例 —— //
-  function attachFlow(flowId: string, plan: PlanSpec) {
-    setFlowIds(prev => { const next = prev.includes(flowId) ? prev : [flowId, ...prev]; saveLS(LS_IDS,next); return next; });
-    setFlowPlans(prev => { const next = { ...prev, [flowId]: plan }; saveLS(LS_PLANS,next); return next; });
-  }
+  const attachFlow = (id: string) => {
+  if (!id) return;
+  setFlowIds(prev =>
+    Array.from(new Set([...(prev ?? []), id]))
+  );
+};
   function detachFlow(flowId: string) {
     setFlowIds(prev => { const next = prev.filter(id=>id!==flowId); saveLS(LS_IDS,next); return next; });
     setFlowPlans(prev => { const { [flowId]:_, ...rest } = prev; saveLS(LS_PLANS,rest); return rest; });
   }
-  function getFlowPlan(flowId: string) { return flowPlans[flowId]; }
+  const getFlowPlan = (id: string) => flowPlans[id];
+const getFlowIds  = () => flowIds.slice();
 
   // ✅ 运行中流程的计划更新（用于“编辑流程”页）
-  function updateFlowPlan(flowId: string, plan: PlanSpec) {
-    setFlowPlans(prev => { const next = { ...prev, [flowId]: plan }; saveLS(LS_PLANS,next); return next; });
+  const updateFlowPlan = (id: string, plan?: PlanSpec) => {
+  if (plan) {
+    setFlowPlans(prev => ({ ...(prev ?? {}), [id]: plan }));
+    try { localStorage.setItem(`plan:${id}`, JSON.stringify(plan)); } catch {}
   }
+  // 无论有没有 plan，都把 id 加进列表，避免“详情页不存在”
+  setFlowIds(prev => Array.from(new Set([...(prev ?? []), id])));
+};
+
 
   return {
     templates, addTemplate, updateTemplate, removeTemplate, toPlanSpec,

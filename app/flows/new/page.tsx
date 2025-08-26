@@ -1,42 +1,60 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import PlanEditor, { type PlanDraft } from "../../_components/PlanEditor";
-import { useFlowStore } from "../../_store/flows";
-import { uid } from "../../_lib/uid";
 import type { PlanSpec } from "../../_types/timer";
+import { useFlowStore } from "../../_store/flows";
+
+const newId = () =>
+    `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`;
 
 export default function NewFlowPage() {
-  const router = useRouter();
-  const store = useFlowStore();
+    const router = useRouter();
+    const store = useFlowStore();
 
-  const [draft, setDraft] = useState<PlanDraft>({
-    title: "", rounds: 1, units: [{ name:"", seconds:0 }],
-  });
+    const [draft, setDraft] = useState<PlanDraft>({
+        title: "",
+        rounds: 1,
+        units: [{ name: "单元 1", seconds: 30, say: "" }],
+    });
 
-  function onConfirm() {
-    const fid = uid();
-    const plan: PlanSpec = { id: fid, title: draft.title, rounds: draft.rounds, units: draft.units, prepare: 0, betweenRounds: 0 };
-    store.attachFlow(fid, plan);
-    router.push("/"); // 回首页，卡片一键开始
-  }
+    const save = useCallback(
+        (d: PlanDraft) => {
+            const id = newId();
+            const next: PlanSpec = {
+                title: (d.title ?? "").trim(),
+                rounds: Math.max(1, Number(d.rounds) || 1),
+                units: (d.units ?? []).map((u) => ({
+                    name: (u.name ?? "").trim(),
+                    seconds: Math.max(1, Number(u.seconds) || 1),
+                    say: (u.say ?? "").trim(),
+                })),
+            };
 
-  return (
-    <main className="p-4">
-      <PlanEditor
-        mode="flow"
-        draft={draft}
-        setDraft={setDraft}
-        onConfirm={onConfirm}
-        onCancel={()=>router.back()}
-        templateOptions={store.templates.map(t=>({id:t.id, title:t.title}))}
-        onLoadTemplate={(id)=>{
-          const t = store.templates.find(x=>x.id===id);
-          if (!t) return;
-          setDraft({ title:t.title, rounds:t.rounds, units:t.units });
-        }}
-      />
-    </main>
-  );
+            // 1) 本地存储
+            try {
+                localStorage.setItem(`plan:${id}`, JSON.stringify(next));
+            } catch { }
+
+            // 2) 同步进本页 store（把 id 与 plan 写入）
+            store.updateFlowPlan(id, next);
+            store.attachFlow(id);
+
+            // 3) 跳回流程主页（按你要求）
+            router.push("/");
+        }
+    );
+
+    return (
+        <div className="p-4">
+            <div className="mb-3 text-lg font-semibold">新建流程</div>
+            <PlanEditor
+                draft={draft}
+                setDraft={setDraft}
+                onConfirm={(d) => save(d)}
+                onCancel={() => router.push("/")}
+            />
+        </div>
+    );
 }

@@ -11,13 +11,10 @@ export type PlanDraft = {
 };
 
 type Props = {
-  mode: "flow" | "template"; // 流程页可显示「从模板载入」
   draft: PlanDraft;
   setDraft: (d: PlanDraft) => void;
-  onConfirm: (d: PlanDraft) => void;   // 右下角「确认」
-  onCancel: () => void;       // 左下角「取消」
-  templateOptions?: { id: string; title: string }[];
-  onLoadTemplate?: (id: string) => void;
+  onConfirm: (d: PlanDraft) => void; // 你现在就是这么用的
+  onCancel: () => void;
 };
 
 export default function PlanEditor({
