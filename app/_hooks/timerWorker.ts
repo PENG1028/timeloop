@@ -49,6 +49,9 @@ type Event = EvPhaseEnter | EvTick | EvRoundEnter | EvState | EvDone | EvError;
 const ctx: DedicatedWorkerGlobalScope = self as any;
 const post = (ev: Event) => ctx.postMessage(ev);
 
+
+
+
 class FlowEngine {
     readonly id: string;
     public plan: PlanSpec;
@@ -67,7 +70,7 @@ class FlowEngine {
         this.plan = { title: plan.title, rounds: Math.max(1, plan.rounds | 0), units: [...plan.units] };
         if (this.plan.units.length === 0) throw new Error("Plan must have at least 1 unit");
     }
-    
+
 
     syncPlan(next: PlanSpec) {
         // 1) 规范化
@@ -87,6 +90,26 @@ class FlowEngine {
 
         // 2) 应用新计划
         this.plan = newPlan;
+        try {
+            const idx = this.unitIndex | 0;
+            const prevUnit = this.plan.units?.[idx];
+            const nextUnit = newPlan.units?.[idx];
+
+            // 防御：索引合法、两侧都存在该单元，且名称未变（避免重排/替换导致误判）
+            const sameSlot = !!(prevUnit && nextUnit) && String(prevUnit.name ?? "") === String(nextUnit.name ?? "");
+            if (sameSlot && typeof prevUnit.seconds === "number" && typeof nextUnit.seconds === "number") {
+                // 计划内 seconds 的规范化：与你文件上方一致（至少 1s）
+                const oldTotal = Math.max(0, Math.round(Math.max(1, Number(prevUnit.seconds) || 1) * 1000));
+                const newTotal = Math.max(0, Math.round(Math.max(1, Number(nextUnit.seconds) || 1) * 1000));
+
+                if (oldTotal !== newTotal) {
+                    const delta = newTotal - oldTotal;
+                    // 只改剩余时间；不动 addedMsAcc（临时加减的净值仍独立）
+                    this.remainingMs = Math.max(0, Math.min(newTotal, this.remainingMs + delta));
+                }
+            }
+        } catch { /* 保守失败不影响后续 */ }
+
 
         // 3) 夹紧当前索引，保证不越界；剩余时间如果超过新总时长就夹到新总时长
         if (this.unitIndex >= this.plan.units.length) {
@@ -149,6 +172,8 @@ class FlowEngine {
         this.timer = setInterval(() => this.onInterval(), this.intervalMs) as unknown as number;
         this.emitState();
     }
+
+
     pause() { if (this.done) return; this.paused = true; this.emitState(); }
     resume() { if (this.done) return; this.paused = false; this.lastTs = Date.now(); this.emitState(); this.emitTick(); }
     stop() { if (this.timer != null) { clearInterval(this.timer as any); this.timer = null; } this.done = true; this.emitState(); }
@@ -254,45 +279,45 @@ const flows = new Map<string, FlowEngine>();
 function getFlow(id: string) { const f = flows.get(id); if (!f) throw new Error("Flow " + id + " not found"); return f; }
 
 ctx.onmessage = (e: MessageEvent<Command>) => {
-  const cmd = e.data;
-  try {
-    switch (cmd.type) {
-      case "START": {
-        // 有旧的就停掉再重建
-        try { flows.get(cmd.flowId)?.stop(); } catch {}
-        const eng = new FlowEngine(cmd.flowId, cmd.payload);
-        flows.set(cmd.flowId, eng);
-        eng.start();
-        break;
-      }
-      case "PAUSE":      getFlow(cmd.flowId).pause(); break;
-      case "RESUME":     getFlow(cmd.flowId).resume(); break;
-      case "STOP": {
-        const eng = flows.get(cmd.flowId);
-        if (eng) {
-          eng.stop();
-          flows.delete(cmd.flowId);
+    const cmd = e.data;
+    try {
+        switch (cmd.type) {
+            case "START": {
+                // 有旧的就停掉再重建
+                try { flows.get(cmd.flowId)?.stop(); } catch { }
+                const eng = new FlowEngine(cmd.flowId, cmd.payload);
+                flows.set(cmd.flowId, eng);
+                eng.start();
+                break;
+            }
+            case "PAUSE": getFlow(cmd.flowId).pause(); break;
+            case "RESUME": getFlow(cmd.flowId).resume(); break;
+            case "STOP": {
+                const eng = flows.get(cmd.flowId);
+                if (eng) {
+                    eng.stop();
+                    flows.delete(cmd.flowId);
+                }
+                break;
+            }
+            case "NEXT_UNIT": getFlow(cmd.flowId).nextUnit(); break;
+            case "NEXT_ROUND": getFlow(cmd.flowId).nextRound(); break;
+            case "ADJUST_TIME": {
+                getFlow(cmd.flowId).adjustTime({
+                    scope: cmd.scope,
+                    deltaSec: cmd.deltaSec,
+                    setSec: cmd.setSec,
+                });
+                break;
+            }
+            case "SYNC_PLAN": {
+                getFlow(cmd.flowId).syncPlan(cmd.payload); // ← 用上面保留的那个 syncPlan
+                break;
+            }
+            default:
+                post({ type: "ERROR", flowId: (cmd as any).flowId, message: "Unknown command: " + (cmd as any).type });
         }
-        break;
-      }
-      case "NEXT_UNIT":  getFlow(cmd.flowId).nextUnit();  break;
-      case "NEXT_ROUND": getFlow(cmd.flowId).nextRound(); break;
-      case "ADJUST_TIME": {
-        getFlow(cmd.flowId).adjustTime({
-          scope: cmd.scope,
-          deltaSec: cmd.deltaSec,
-          setSec: cmd.setSec,
-        });
-        break;
-      }
-      case "SYNC_PLAN": {
-        getFlow(cmd.flowId).syncPlan(cmd.payload); // ← 用上面保留的那个 syncPlan
-        break;
-      }
-      default:
-        post({ type: "ERROR", flowId: (cmd as any).flowId, message: "Unknown command: " + (cmd as any).type });
+    } catch (err: any) {
+        post({ type: "ERROR", flowId: (cmd as any).flowId, message: String(err?.message || err) });
     }
-  } catch (err: any) {
-    post({ type: "ERROR", flowId: (cmd as any).flowId, message: String(err?.message || err) });
-  }
 };

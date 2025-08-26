@@ -428,8 +428,32 @@ const Local = (() => {
         },
 
         syncPlan(fid, plan) {
-            // 仅更新快照，下一单元/下一轮即会生效
+            // 先热修正当前视图的剩余时间（与 worker 行为对齐）
+            const v = getView(fid);
+            const prevPlan = BUS.planMap.get(fid);
+            const idx = v.unitIndex | 0;
+
+            try {
+                const prevUnit = prevPlan?.units?.[idx];
+                const nextUnit = plan?.units?.[idx];
+
+                // 与 worker 相同的防御：同槽位、同名字才热更，避免重排误触发
+                const sameSlot = !!(prevUnit && nextUnit) && String(prevUnit.name ?? "") === String(nextUnit.name ?? "");
+                if (sameSlot && typeof prevUnit.seconds === "number" && typeof nextUnit.seconds === "number") {
+                    // 与 worker 同步的“至少 1s”规范化
+                    const oldTotal = Math.max(0, Math.round(Math.max(1, Number(prevUnit.seconds) || 1) * 1000));
+                    const newTotal = Math.max(0, Math.round(Math.max(1, Number(nextUnit.seconds) || 1) * 1000));
+                    if (oldTotal !== newTotal) {
+                        const delta = newTotal - oldTotal;
+                        v.remainingMs = Math.max(0, Math.min(newTotal, v.remainingMs + delta));
+                        // 不动 v.addedMs：保持“临时加减”通道独立
+                    }
+                }
+            } catch { /* 保守失败不影响 set(plan) */ }
+
+            // 再更新快照，让后续单元/轮按新计划走
             BUS.planMap.set(fid, plan);
+            schedulePaint();
         },
     };
 

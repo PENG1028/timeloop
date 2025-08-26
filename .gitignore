@@ -1,3 +1,60 @@
-**/*.json
-node_modules
-**/*.zip
+# Node & package managers
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+.eslintcache
+.stylelintcache
+*.tsbuildinfo
+
+# Env (提交一个 .env.example 即可)
+.env
+.env.*
+!.env.example
+
+# Build / output / caches
+dist/
+build/
+out/
+.next/
+.turbo/
+.cache/
+.parcel-cache/
+.tmp/
+temp/
+tmp/
+
+# Test & coverage reports
+coverage/
+.nyc_output/
+reports/
+playwright-report/
+test-results/
+junit.xml
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# Artifacts & logs
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.log
+*.log.*
+
+# Source maps (若需调试可移除这一条)
+*.map
+
+# Next.js
+next-env.d.ts
+.vercel/
