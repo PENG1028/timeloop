@@ -1,4 +1,4 @@
-// app/lib/duration.ts
+// app/_lib/duration.ts
 export type DurationParts = { d?: number; h?: number; m?: number; s?: number };
 
 const clampInt = (v: number) => (Number.isFinite(v) ? Math.max(0, Math.floor(v)) : 0);
