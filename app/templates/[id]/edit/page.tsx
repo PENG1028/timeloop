@@ -26,6 +26,7 @@ export default function FlowDetailPage({ params }: { params: { id: string } }) {
   // 完成：保存并返回首页
   const onConfirm = useCallback((d: PlanDraft) => {
     const next: PlanSpec = {
+      id: params.id, 
       title: (d.title ?? "").trim(),
       rounds: Math.max(1, Number(d.rounds) || 1),
       units: (d.units ?? []).map(u => ({

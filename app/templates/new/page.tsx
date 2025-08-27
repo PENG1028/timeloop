@@ -24,6 +24,7 @@ export default function NewFlowPage() {
   const save = useCallback((d: PlanDraft) => {
     const id = newId();
     const next: PlanSpec = {
+      id,
       title: (d.title ?? "").trim(),
       rounds: Math.max(1, Number(d.rounds) || 1),
       units: (d.units ?? []).map(u => ({
