@@ -1,9 +1,61 @@
-/* app/globals.css —— 只有这三条指令，拼写是 @tailwind，不是 @tailwindcss */
+/* app/globals.css —— 先放 3 条指令，顺序固定：base → components → utilities */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ===== Apple-like palette (Light first) ===== */
+:root {
+  --background: 0 0% 100%;
+  --foreground: 222 16% 12%;
+
+  /* iOS 蓝（近似 #0A84FF） */
+  --primary: 211 100% 52%;
+  --primary-foreground: 0 0% 100%;
+
+  /* 细灰边/淡灰面 */
+  --border: 220 14% 90%;
+  --ring:   211 100% 52%;
+  --muted:  220 14% 96%;
+  --muted-foreground: 220 9% 35%;
+
+  /* 语义色 */
+  --success: 142 48% 40%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 100% 45%;
+  --warning-foreground: 0 0% 100%;
+  --danger:  356 78% 50%;
+  --danger-foreground: 0 0% 100%;
+}
+
+/* 深色方案（可留着将来切换 .dark） */
+.dark {
+  --background: 222 12% 10%;
+  --foreground: 0 0% 98%;
+  --border: 222 10% 20%;
+  --muted:  222 12% 16%;
+  --muted-foreground: 215 12% 75%;
+}
+
 /* 可选的小优化 */
 :root { color-scheme: light dark; }
-html, body { height: 100%; }
+html, body { height: 100%; background: hsl(var(--background)); color: hsl(var(--foreground)); }
 body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+/* ===== 通用组件（用 @layer components —— 此时已存在 @tailwind components） ===== */
+@layer components {
+  .card { @apply rounded-2xl border bg-white shadow-soft; border-color: hsl(var(--border)); }
+  .card-muted { background: hsl(var(--muted)); }
+
+  .btn { @apply inline-flex items-center justify-center rounded-xl px-3 py-2 text-sm font-medium transition-colors; }
+  .btn-primary { @apply btn; background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); }
+  .btn-primary:hover { filter: brightness(0.96); }
+  .btn-ghost { @apply btn; background: hsl(var(--muted)); color: hsl(var(--foreground)); }
+  .btn-ghost:hover { filter: brightness(0.97); }
+  .btn-danger { @apply btn; background: hsl(var(--danger)); color: hsl(var(--danger-foreground)); }
+
+  .badge { @apply inline-flex items-center rounded-lg px-2 py-0.5 text-xs; }
+  .badge-muted   { background: hsl(var(--muted)); color: hsl(var(--muted-foreground)); }
+  .badge-success { background: color-mix(in oklab, hsl(var(--success)) 14%, transparent); color: hsl(var(--success)); }
+  .badge-warning { background: color-mix(in oklab, hsl(var(--warning)) 18%, transparent); color: hsl(var(--warning)); }
+  .badge-danger  { background: color-mix(in oklab, hsl(var(--danger)) 14%, transparent);  color: hsl(var(--danger)); }
+}

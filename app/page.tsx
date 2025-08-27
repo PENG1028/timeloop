@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useTimerClient, unlockGlobalAudio } from "./_hooks/useTimerClient";
 import type { PlanSpec } from "./_types/timer";
 import { formatDurationEn, formatCountdownClock } from "./_lib/duration";
+import AppVersionBadge from "./_components/AppVersionBadge";
 
 const k = (id: string) => `plan:${id}`;
 const isPlanKey = (s: string | null) => !!s && s.startsWith("plan:");
@@ -109,6 +110,7 @@ export default function HomeMobile() {
           {/* 顶栏（含快速删除） */}
           <div className="flex items-center justify-between">
             <div className="text-lg font-semibold">TimeLoop</div>
+            <AppVersionBadge />
             {!bulk ? (
               <button className="px-3 py-1.5 rounded-lg bg-rose-50 text-rose-600 hover:bg-rose-100" onClick={enterBulk}>快速删除</button>
             ) : (
