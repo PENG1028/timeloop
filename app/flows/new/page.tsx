@@ -48,7 +48,7 @@ export default function NewFlowPage() {
     );
 
     return (
-        <div className="p-4">
+        <div className="mx-auto max-w-[880px] w-full p-4 space-y-4">
             <div className="mb-3 text-lg font-semibold">新建流程</div>
             <PlanEditor
                 draft={draft}

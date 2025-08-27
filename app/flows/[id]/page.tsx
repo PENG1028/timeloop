@@ -311,7 +311,7 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
   const minRound = Math.max(1, (flows[params.id]?.roundIndex ?? -1) + 1);
 
   return (
-    <main className="p-4 space-y-4">
+    <main className="mx-auto max-w-[880px] w-full p-4 space-y-4">
       {(!mounted || restoring) ? (
         // 骨架
         <div className="rounded-2xl p-4 border border-slate-200/60 dark:border-white/10">

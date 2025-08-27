@@ -99,7 +99,7 @@ export default function HomeMobile() {
   );
 
   return (
-    <main className="p-4 space-y-3">
+    <main className="mx-auto max-w-[880px] w-full p-4 space-y-3">
       {!mounted ? (
         <>
           <div className="h-10" />
