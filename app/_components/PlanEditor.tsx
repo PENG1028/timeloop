@@ -10,11 +10,19 @@ export type PlanDraft = {
   units: UnitSpec[]; // { name, seconds, say? }
 };
 
+type PlanSpec = { title: string; rounds: number; units: { name: string; seconds: number; say?: string }[] };
+
+type TemplateOption = { id: string; label: string; plan: PlanSpec ; title:string};
+
 type Props = {
-  draft: PlanDraft;
-  setDraft: (d: PlanDraft) => void;
-  onConfirm: (d: PlanDraft) => void; // 你现在就是这么用的
+  /** "create" 新建 / "edit" 编辑；不传默认 "create" */
+  mode?: "create" | "edit";
+  draft: PlanSpec;
+  setDraft: (d: PlanSpec) => void;
+  onConfirm: (d: PlanSpec) => void;
   onCancel: () => void;
+  templateOptions?: TemplateOption[];
+  onLoadTemplate?: (id: string) => void;
 };
 
 export default function PlanEditor({
@@ -54,7 +62,7 @@ export default function PlanEditor({
             <p className="text-xs opacity-60 mt-1">「轮」表示整套单元顺序重复的次数。</p>
           </div>
 
-          {mode==="flow" && (templateOptions?.length ?? 0) > 0 && (
+          {(templateOptions?.length ?? 0) > 0 && (
             <div>
               <label className="text-sm opacity-70">从模板载入（可选）</label>
               <select className="mt-1 rounded-xl border px-4 py-3 text-base bg-transparent"

@@ -176,7 +176,7 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
   }), []);
 
   const materializeNextPlan = useCallback((): PlanSpec => {
-    const base = plan ?? ({ title: "", rounds: 1, units: [] } as PlanSpec);
+    const base = plan ?? ({ id: params.id, title: "", rounds: 1, units: [] } as PlanSpec);
     const src = draft ?? ({} as Partial<PlanSpec>);
     const title = (src.title ?? base.title ?? "").trim();
     const rounds = Math.max(1, Number(src.rounds ?? base.rounds) || 1);
@@ -185,7 +185,7 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
       seconds: Math.max(1, Number(u?.seconds) || 1),
       say: (u?.say ?? "").trim(),
     }));
-    return { title, rounds, units };
+    return { id: params.id, title, rounds, units };
   }, [draft, plan]);
 
   const lastSavedRef = useRef<string>("");
@@ -272,8 +272,9 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
     // ✅ 关键：运行/暂停时，立即把“新的轮次”推给计时内核（不重启、不清零）
     const v = flows[params.id];
     if (v && !v.done) {
-      const base = plan ?? ({ title: "", rounds: 1, units: [] } as PlanSpec);
+      const base = plan ?? ({ id: params.id, title: "", rounds: 1, units: [] } as PlanSpec);
       const nextPlanInstant: PlanSpec = {
+        id: params.id,
         title: (draft?.title ?? base.title ?? "").trim(),
         rounds, // 用最新轮次
         units: (draft?.units ?? base.units ?? []).map(u => ({
@@ -290,6 +291,7 @@ export default function FlowDetailEditPage({ params }: { params: { id: string } 
   const savePlan = useCallback((d?: PlanDraft) => {
     const src = d ?? draft;
     const nextPlan: PlanSpec = {
+      id: params.id, 
       title: (src.title ?? "").trim(),
       rounds: Math.max(1, Number(src.rounds) || 1),
       units: (src.units ?? []).map(u => ({

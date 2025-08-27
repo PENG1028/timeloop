@@ -107,7 +107,7 @@ type WheelHandle = {
 };
 
 const Wheel = forwardRef(function Wheel(
-    { label, initial, min = 0, max = 59 }: { label: string; initial: number; min?: number; max?: number },
+    { label, initial, min = 0, max = 59 }: { label?: string; initial: number; min?: number; max?: number },
     ref: React.Ref<WheelHandle>
 ) {
     const range = max - min + 1;

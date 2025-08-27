@@ -142,7 +142,7 @@ class FlowEngine {
                 // 确保计时器在跑
                 if (this.timer == null) {
                     this.lastTs = Date.now();
-                    this.timer = setInterval(() => this.tick(), this.intervalMs) as any;
+                    this.timer = setInterval(() => this.onInterval(), this.intervalMs) as any;
                 }
             }
         }

@@ -19,31 +19,32 @@ export default function NewFlowPage() {
         units: [{ name: "单元 1", seconds: 30, say: "" }],
     });
 
+    const { updateFlowPlan, attachFlow } = store;
+
     const save = useCallback(
         (d: PlanDraft) => {
             const id = newId();
             const next: PlanSpec = {
+                id,
                 title: (d.title ?? "").trim(),
                 rounds: Math.max(1, Number(d.rounds) || 1),
-                units: (d.units ?? []).map((u) => ({
+                units: (d.units ?? []).map(u => ({
                     name: (u.name ?? "").trim(),
                     seconds: Math.max(1, Number(u.seconds) || 1),
                     say: (u.say ?? "").trim(),
                 })),
             };
 
-            // 1) 本地存储
             try {
                 localStorage.setItem(`plan:${id}`, JSON.stringify(next));
             } catch { }
 
-            // 2) 同步进本页 store（把 id 与 plan 写入）
-            store.updateFlowPlan(id, next);
-            store.attachFlow(id);
+            updateFlowPlan(id, next);
+            attachFlow(id);
 
-            // 3) 跳回流程主页（按你要求）
             router.push("/");
-        }
+        },
+        [router, updateFlowPlan, attachFlow] // ← 必填的第二个参数（依赖数组）
     );
 
     return (

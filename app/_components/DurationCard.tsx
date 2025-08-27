@@ -2,7 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fromSeconds, toSeconds, formatDurationEn } from "@/lib/duration";
+import { fromSeconds, toSeconds, formatDurationEn } from "../_lib/duration";
 
 type Props = {
   label?: string;                 // 标题，如 "Duration"
